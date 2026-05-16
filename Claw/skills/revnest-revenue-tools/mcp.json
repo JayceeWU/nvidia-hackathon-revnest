@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "revnest-revenue-tools": {
+      "command": "python3",
+      "args": ["/home/ubuntu/RevNest/Claw/tools/revnest_mcp_server.py"]
+    }
+  }
+}

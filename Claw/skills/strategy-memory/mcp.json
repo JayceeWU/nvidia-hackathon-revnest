@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "strategy-memory": {
+      "command": "/sandbox/.openclaw/skills/strategy-memory/scripts/run_mcp.sh",
+      "args": [],
+      "env": {
+        "STRATEGY_MEMORY_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:55434/dev",
+        "STRATEGY_MEMORY_MODEL": "/sandbox/.openclaw/workspace/.cache/strategy-memory/models/all-MiniLM-L6-v2",
+        "STRATEGY_MEMORY_TOP_K": "8",
+        "STRATEGY_MEMORY_MIN_SCORE": "0.22"
+      },
+      "connectionTimeoutMs": 60000
+    }
+  }
+}

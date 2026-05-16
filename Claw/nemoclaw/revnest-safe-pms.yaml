@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 RevNest. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+preset:
+  name: revnest-safe-pms
+  description: "RevNest demo policy: allow read-only MockHotel PMS inspection, block live PMS writes from the agent sandbox"
+
+network_policies:
+  revnest_mockhotel_readonly:
+    name: revnest_mockhotel_readonly
+    endpoints:
+      - host: host.openshell.internal
+        port: 3001
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          # host.openshell.internal resolves to a private host-gateway address.
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+        rules:
+          - allow: { method: GET, path: "/api/agent/current-prices" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/local/bin/node }
+      - { path: /usr/bin/node }
+      - { path: /usr/bin/python3 }
+      - { path: /usr/local/bin/python3 }
+
+  # Intentionally absent:
+  # - host.openshell.internal:3000 WebApp accept APIs
+  # - non-GET MockHotel APIs
+  # - MockHotel PostgreSQL ports
+  # - broad curl access
+  #
+  # This omission is the security boundary for the hackathon demo: Revy can
+  # compare against live PMS rates, but only a human WebApp accept action can
+  # sync accepted pending tasks to MockHotel.

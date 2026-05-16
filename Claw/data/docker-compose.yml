@@ -1,0 +1,33 @@
+services:
+  postgres:
+    container_name: revnest-claw-postgres
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "55434:5432"
+    volumes:
+      - revnest-claw-postgres-data:/var/lib/postgresql/data
+      - ./sql/database.sql:/docker-entrypoint-initdb.d/1.database.sql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/2.schema.sql
+      - ./sql/data.sql:/docker-entrypoint-initdb.d/3.data.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      default:
+      openshell-docker:
+        aliases:
+          - revnest-claw-postgres
+          - postgres
+
+volumes:
+  revnest-claw-postgres-data:
+
+networks:
+  openshell-docker:
+    external: true

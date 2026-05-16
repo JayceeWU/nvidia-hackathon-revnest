@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# OpenClaw local workspace state
+.openclaw/
+
+# Local run outputs and logs
+*.log
+logs/
+runs/
+tmp/
+temp/
+revpar_*.json
+tool_output*.json
