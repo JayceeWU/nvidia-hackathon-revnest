@@ -15,6 +15,7 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
 from pathlib import Path, PurePosixPath
 import queue
 import shutil
@@ -35,6 +36,7 @@ DEFAULT_LOG_PATH = ROOT / "runs" / "airbnb-pricing-progress.log"
 DEFAULT_NEMOCLAW_SANDBOX = "my-assistant"
 DEFAULT_NEMOCLAW_WORKDIR = "/sandbox/RevNest/Claw"
 DEFAULT_RUNTIME_MODE = "split-demo"
+DEFAULT_OPENCLAW_AGENT = os.environ.get("REVNEST_OPENCLAW_AGENT", "main")
 WORKFLOW_NAME = "pricing-workflow"
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
 
@@ -1042,6 +1044,10 @@ def log_event(
     )
 
 
+def compact_output_tail(value: str, limit: int = 900) -> str:
+    return " ".join(str(value or "").strip().split())[-limit:]
+
+
 class RuntimeSetupError(RuntimeError):
     pass
 
@@ -1171,8 +1177,13 @@ def upload_message_to_sandbox(
     return remote_path
 
 
+def safe_path_slug(value: str, limit: int = 80) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in value)[:limit] or "run"
+
+
 def build_agent_options(args: argparse.Namespace) -> list[str]:
     options = [
+        "--local",
         "--agent",
         args.agent,
         "--session-id",
@@ -1247,8 +1258,39 @@ def prepare_openclaw_command(
         message=message,
         env=sandbox_env,
     )
+    runtime_dir = f"/tmp/revnest-openclaw-runtime-{safe_path_slug(args.session_id)}"
+    runtime_config_code = (
+        "import json,os,pathlib,sys;"
+        "runtime=pathlib.Path(sys.argv[1]);"
+        "workdir=sys.argv[2];"
+        "agent_id=sys.argv[3];"
+        "src=pathlib.Path('/sandbox/.openclaw/openclaw.json');"
+        "data=json.loads(src.read_text());"
+        "agents=data.setdefault('agents',{});"
+        "defaults=agents.setdefault('defaults',{});"
+        "defaults['workspace']=workdir;"
+        "(runtime/'agents'/agent_id/'agent').mkdir(parents=True,exist_ok=True);"
+        "entry={'id':agent_id,'default':True,'workspace':workdir,'agentDir':str(runtime/'agents'/agent_id/'agent')};"
+        "agents['list']=[entry]+[item for item in agents.get('list',[]) if item.get('id')!=agent_id];"
+        "strategy=data.get('mcp',{}).get('servers',{}).get('strategy-memory');"
+        "env=strategy.setdefault('env',{}) if strategy else None;"
+        "strategy and strategy.update({'command':workdir+'/skills/strategy-memory/scripts/run_mcp.sh'});"
+        "env is not None and env.update({'STRATEGY_MEMORY_VENV':str(runtime/'venvs'/'strategy-memory'),'STRATEGY_MEMORY_MODEL':str(runtime/'cache'/'strategy-memory'/'models'/'all-MiniLM-L6-v2')});"
+        "plugins=data.get('plugins',{}).get('entries',{});"
+        "plugins.get('openclaw-weixin',{}).update({'enabled':False});"
+        "data.get('plugins',{}).get('installs',{}).pop('openclaw-weixin',None);"
+        "discord=data.get('channels',{}).get('discord');"
+        "discord and not os.environ.get('DISCORD_BOT_TOKEN') and discord.update({'enabled':False});"
+        "(runtime/'openclaw.json').write_text(json.dumps(data))"
+    )
     remote_script = (
         'set -eu; '
+        f'runtime_dir={shlex.quote(runtime_dir)}; '
+        'mkdir -p "$runtime_dir/agents"; '
+        'if [ ! -e "$runtime_dir/plugin-runtime-deps" ]; then ln -s /sandbox/.openclaw/plugin-runtime-deps "$runtime_dir/plugin-runtime-deps"; fi; '
+        f'python3 -c {shlex.quote(runtime_config_code)} "$runtime_dir" "$PWD" {shlex.quote(args.agent)}; '
+        'export OPENCLAW_STATE_DIR="$runtime_dir"; '
+        'export OPENCLAW_CONFIG_PATH="$runtime_dir/openclaw.json"; '
         'export PATH="/tmp/npm-global/bin:${PATH:-}"; '
         'export NODE_PATH="/sandbox/RevNest/Claw/node_modules:/tmp/npm-global/lib/node_modules:${NODE_PATH:-}"; '
         'msg_file=$1; shift; exec openclaw agent "$@" --message "$(cat "$msg_file")"'
@@ -1585,7 +1627,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-price", help="Maximum nightly price")
     parser.add_argument("--pricing-horizon", type=int, help="Number of future nights to price")
     parser.add_argument("--my-place", help="Optional Airbnb listing URL or place reference")
-    parser.add_argument("--agent", default="revnest", help="OpenClaw agent id")
+    parser.add_argument("--agent", default=DEFAULT_OPENCLAW_AGENT, help="OpenClaw agent id")
     parser.add_argument("--model", help="Optional OpenClaw model override for the main pricing workflow run")
     parser.add_argument("--session-id", default=None, help="OpenClaw session id")
     parser.add_argument("--run-id", default=None, help="Progress run id; defaults to session id")
@@ -1745,6 +1787,9 @@ def main() -> int:
         error = "openclaw request timeout"
     else:
         error = f"exit code {returncode}"
+    compact_tail = compact_output_tail(output_tail)
+    if compact_tail:
+        error = f"{error}: {compact_tail}"
     log_event(
         run_id=args.run_id,
         stage="agent_finish",

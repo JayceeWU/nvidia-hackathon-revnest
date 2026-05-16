@@ -4,7 +4,7 @@ const DEFAULT_MODEL = "nemotron3:33b";
 
 export function defaultRevyState() {
   return {
-    status: "thinking",
+    status: "idle",
     model: DEFAULT_MODEL,
     headline: "Reviewing current pricing signals and waiting for the next host question.",
     updatedAt: "May 15, 2026 7:20 PM",

@@ -1198,7 +1198,7 @@ INSERT INTO revy_state (account_id, data, updated_at) VALUES
   (
     '00000000-0000-0000-0000-000000000102',
     $${
-      "status": "thinking",
+      "status": "idle",
       "model": "nemotron3:33b",
       "headline": "Reviewing the first Airbnb listing setup path and waiting for a property to price.",
       "updatedAt": "May 15, 2026 7:20 PM",
@@ -1216,7 +1216,7 @@ INSERT INTO revy_state (account_id, data, updated_at) VALUES
   (
     '00000000-0000-0000-0000-000000000103',
     $${
-      "status": "thinking",
+      "status": "idle",
       "model": "nemotron3:33b",
       "headline": "Comparing Dream Inn Santa Cruz room-type guardrails for the next 3 days.",
       "updatedAt": "May 15, 2026 7:21 PM",

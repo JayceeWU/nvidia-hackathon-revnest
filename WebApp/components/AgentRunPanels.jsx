@@ -39,6 +39,7 @@ export function buildCompletedAgentEvents(propertyName = "this property") {
 const ACTIVE_STATUSES = new Set(["started", "running", "info"]);
 const DONE_STATUSES = new Set(["completed", "skipped"]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "skipped", "stopped"]);
+const LIVE_RUN_STATUSES = new Set(["running", "started"]);
 
 function eventIdentity(event) {
   if (event.stage === "agent_start" || event.stage === "agent_finish") {
@@ -131,9 +132,9 @@ export default function AgentRunPanels({
   const firstTimestamp = parseTime(startedAt) || parseTime(visibleEvents[0]?.timestamp);
   const lastTimestamp = parseTime(latestEvent?.completedAt || latestEvent?.timestamp);
   const isTerminalRun = TERMINAL_STATUSES.has(runStatus);
-  const isActiveRun = runStatus === "running" || (!isTerminalRun && visibleEvents.some((event) => ACTIVE_STATUSES.has(event.status)));
+  const isActiveRun = LIVE_RUN_STATUSES.has(runStatus);
   const elapsedSeconds = firstTimestamp ? ((isActiveRun ? now : lastTimestamp || now) - firstTimestamp) / 1000 : 0;
-  const workLabel = firstTimestamp ? `Worked for ${formatDuration(elapsedSeconds)}` : "Ready";
+  const workLabel = firstTimestamp && (isActiveRun || isTerminalRun) ? `Worked for ${formatDuration(elapsedSeconds)}` : "Ready";
 
   useEffect(() => {
     if (!isActiveRun) return undefined;

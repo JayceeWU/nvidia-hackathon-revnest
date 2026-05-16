@@ -185,7 +185,7 @@ const defaultRevyThinkingStatus = {
 };
 
 const defaultRevyState = {
-  status: "thinking",
+  status: "idle",
   model: "nemotron3:33b",
   headline: "Reviewing current pricing signals and waiting for the next host question.",
   updatedAt: "May 15, 2026 7:20 PM",
@@ -198,6 +198,23 @@ const defaultRevyState = {
     },
   ],
 };
+
+const displayableRevyRunStatuses = new Set(["running", "completed", "failed", "stopped"]);
+
+function revyStateHasDisplayableRun(state) {
+  return Boolean(state?.runId || state?.activeRunId || displayableRevyRunStatuses.has(state?.status));
+}
+
+function normalizeRevyStateForDisplay(state) {
+  if (revyStateHasDisplayableRun(state)) {
+    return state;
+  }
+  return {
+    ...state,
+    status: state?.status === "thinking" ? "idle" : state?.status || "idle",
+    events: [],
+  };
+}
 
 const emptyPropertyForm = {
   name: "",
@@ -410,7 +427,12 @@ export default function Home() {
     const nextState = payload.state || defaultRevyState;
     const conversations = payload.conversations || [];
 
-    setRevyState(nextState);
+    setRevyState((current) => {
+      if (revyStateHasDisplayableRun(current) && !revyStateHasDisplayableRun(nextState)) {
+        return current;
+      }
+      return normalizeRevyStateForDisplay(nextState);
+    });
     setRevyConversations(conversations);
     setSelectedRevyConversationId((current) => {
       if (current && conversations.some((conversation) => [conversation.id, conversation.conversationId].includes(current))) {
