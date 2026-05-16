@@ -18,6 +18,10 @@ function sessionSecret() {
   return "revnest-local-dev-session-secret";
 }
 
+function secureSessionCookie() {
+  return process.env.NODE_ENV === "production" && process.env.REVNEST_INSECURE_LOCAL_COOKIES !== "1";
+}
+
 function encodeJson(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
@@ -57,7 +61,7 @@ export function setSessionCookie(response, user) {
     value: createSessionValue(user),
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: secureSessionCookie(),
     path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
@@ -69,7 +73,7 @@ export function clearSessionCookie(response) {
     value: "",
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: secureSessionCookie(),
     path: "/",
     maxAge: 0,
   });

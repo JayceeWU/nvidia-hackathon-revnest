@@ -13,6 +13,7 @@ const webRoot = process.cwd();
 const repoRoot = path.resolve(webRoot, "..");
 const clawRoot = path.join(repoRoot, "Claw");
 const runsDir = path.join(clawRoot, "runs");
+const agentRunFixture = process.env.REVNEST_AGENT_RUN_FIXTURE || "";
 
 function sanitize(value) {
   return String(value || "run").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
@@ -129,8 +130,14 @@ export function startAgentRun(payload) {
   const conversationId = payload.conversationId || `revy-${sanitize(runSubject)}-${now}`;
   const runId = `pricing-workflow-${sanitize(runSubject)}-${now}`;
   const logPath = runLogPath(runId);
+  const runnerScript =
+    agentRunFixture === "demo1"
+      ? "tests/demo1_airbnb_agent_fixture.py"
+      : agentRunFixture === "demo2"
+        ? "tests/demo2_agent_fixture.py"
+        : "tools/run_pricing_agent.py";
   const args = [
-    "tools/run_pricing_agent.py",
+    runnerScript,
     "--clear-log",
     "--session-id",
     runId,

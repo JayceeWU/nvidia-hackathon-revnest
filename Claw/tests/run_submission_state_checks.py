@@ -24,6 +24,8 @@ REQUIRED_PATHS = [
     "Claw/tests/run_safe_pms_evidence_chain_demo.py",
     "Claw/tests/run_full_hotel_agent_evidence_design.py",
     "Claw/tests/run_hotel_seed_consistency_tests.py",
+    "Claw/tests/run_demo1_airbnb_e2e.py",
+    "Claw/tests/run_demo2_hotel_e2e.py",
     "Claw/tools/run_pricing_agent.py",
     "Claw/tools/run_hotel_heartbeat.py",
     "WebApp/package.json",

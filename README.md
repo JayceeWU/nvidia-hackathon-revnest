@@ -397,7 +397,27 @@ Claw smoke tests:
 python3 Claw/tests/run_strategy_rag_gate_tests.py
 python3 Claw/tests/run_hotel_seed_consistency_tests.py
 python3 Claw/tests/run_safe_pms_evidence_chain_demo.py
+python3 Claw/tests/run_demo1_airbnb_e2e.py
+python3 Claw/tests/run_demo2_hotel_e2e.py
 ```
+
+The Demo1 and Demo2 e2e tests start a temporary WebApp production server and use
+deterministic agent fixtures by default. Demo1 verifies Airbnb login, default
+add-property data, OpenClaw run launch, completed run status, and the new
+property appearing in My Properties. Demo2 verifies the hotel batch pricing
+flow, generated pending task, Discord notification, Discord prompt approval
+routing through WebApp Accept, and MockHotel database update only after approval.
+
+To exercise real OpenClaw/NemoClaw runs instead, start WebApp yourself and run:
+
+```bash
+python3 Claw/tests/run_demo1_airbnb_e2e.py --live-agent --no-start-webapp --webapp-url http://localhost:3000 --timeout-seconds 1800
+python3 Claw/tests/run_demo2_hotel_e2e.py --live-agent --no-start-webapp --webapp-url http://localhost:3000 --timeout-seconds 1800 --skip-discord-check
+```
+
+The default Demo2 fixture run injects a local `DISCORD_WEBHOOK_URL` capture
+server. For externally managed live-agent runs, start WebApp with your own
+Discord test webhook if you want to inspect the live notification path.
 
 Useful tool checks:
 
