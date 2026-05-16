@@ -13,9 +13,9 @@
     "--runtime-mode",
     "nemoclaw",
     "--session-id",
-    "hotel-full-evidence-20260516T160957Z",
+    "hotel-full-evidence-20260516T202747Z",
     "--run-id",
-    "hotel-full-evidence-20260516T160957Z",
+    "hotel-full-evidence-20260516T202747Z",
     "--thinking",
     "medium",
     "--verbose",
@@ -23,14 +23,36 @@
     "--timeout-seconds",
     "1800"
   ],
-  "agent_executed": false,
+  "agent_executed": true,
   "agent_result": {
-    "reason": "Pass --run-agent to execute the full hotel workflow.",
-    "skipped": true
+    "command": [
+      "python3",
+      "tools/run_pricing_agent.py",
+      "--clear-log",
+      "--account-id",
+      "00000000-0000-0000-0000-000000000103",
+      "--property-type",
+      "hotel",
+      "--hotel-scope",
+      "all-room-types",
+      "--runtime-mode",
+      "nemoclaw",
+      "--session-id",
+      "hotel-full-evidence-20260516T202747Z",
+      "--run-id",
+      "hotel-full-evidence-20260516T202747Z",
+      "--thinking",
+      "medium",
+      "--verbose",
+      "on",
+      "--timeout-seconds",
+      "1800"
+    ],
+    "returncode": 0
   },
-  "generated_at": "2026-05-16T16:09:57Z",
-  "policy": "revnest-safe-pms",
-  "run_id": "hotel-full-evidence-20260516T160957Z",
+  "generated_at": "2026-05-16T20:27:47Z",
+  "policy": "revnest-judge-minimal",
+  "run_id": "hotel-full-evidence-20260516T202747Z",
   "runtime": "hotel-nemoclaw",
-  "sandbox": "my-assistant"
+  "sandbox": "revnest-judge"
 }

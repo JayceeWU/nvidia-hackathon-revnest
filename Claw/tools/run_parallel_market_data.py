@@ -816,6 +816,78 @@ def tail(value: str, max_chars: int = 4000) -> str:
     return value[-max_chars:] if len(value) > max_chars else value
 
 
+def compact_source_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    compact: dict[str, Any] = {}
+    for key in (
+        "source",
+        "tool",
+        "location",
+        "resolved_location",
+        "query",
+        "date_range",
+        "summary",
+        "demand_signal",
+        "rate_summary",
+        "stats",
+        "totals",
+    ):
+        if key in payload:
+            compact[key] = payload[key]
+
+    for key in ("events", "properties", "hotels", "daily", "searches", "results"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            compact[f"{key}_count"] = len(value)
+            sample = value[:3]
+            if sample:
+                compact[f"sample_{key}"] = sample
+
+    return compact
+
+
+def compact_market_data_output(output: dict[str, Any], output_path: Path) -> dict[str, Any]:
+    results = []
+    for result in output.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        results.append(
+            {
+                "stage": result.get("stage"),
+                "tool": result.get("tool"),
+                "label": result.get("label"),
+                "status": result.get("status"),
+                "summary": result.get("summary"),
+                "error": result.get("error"),
+                "duration_seconds": result.get("duration_seconds"),
+                "summary_write": result.get("summary_write"),
+                "source": compact_source_payload(result.get("json")),
+            }
+        )
+
+    return {
+        "run_id": output.get("run_id"),
+        "account_id": output.get("account_id"),
+        "property_id": output.get("property_id"),
+        "summary_property_ids": output.get("summary_property_ids"),
+        "address": output.get("address"),
+        "property_type": output.get("property_type"),
+        "start_date": output.get("start_date"),
+        "end_date": output.get("end_date"),
+        "pricing_horizon": output.get("pricing_horizon"),
+        "currency": output.get("currency"),
+        "status": output.get("status"),
+        "status_counts": output.get("status_counts"),
+        "output_path": str(output_path),
+        "summary_write_errors": output.get("summary_write_errors"),
+        "hotel_home_dashboard_write": output.get("hotel_home_dashboard_write"),
+        "moodtrip_note": output.get("moodtrip_note"),
+        "results": results,
+    }
+
+
 def run_task(task: dict[str, Any], env: dict[str, str], log_path: Path, timeout_seconds: int) -> dict[str, Any]:
     stage = task["stage"]
     tool = task["tool"]
@@ -1109,6 +1181,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-timeout-seconds", type=int, default=180)
     parser.add_argument("--log-path", default=str(DEFAULT_LOG_PATH))
     parser.add_argument("--output-path", help="Combined JSON output path")
+    parser.add_argument(
+        "--stdout-mode",
+        choices=["summary", "full", "none"],
+        default=os.environ.get("REVNEST_MARKET_DATA_STDOUT_MODE", "summary"),
+        help="Control stdout size. Full JSON is always written to --output-path.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print the fan-out plan without calling APIs")
     return parser
 
@@ -1256,7 +1334,10 @@ def main() -> int:
         metadata={"status_counts": status_counts, "output_path": str(output_path)},
     )
 
-    print(json.dumps(output, indent=2, ensure_ascii=False, sort_keys=True))
+    if args.stdout_mode == "full":
+        print(json.dumps(output, indent=2, ensure_ascii=False, sort_keys=True))
+    elif args.stdout_mode == "summary":
+        print(json.dumps(compact_market_data_output(output, output_path), indent=2, ensure_ascii=False, sort_keys=True))
     return 0 if overall_status == "completed" else 1
 
 

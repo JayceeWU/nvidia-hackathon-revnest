@@ -1,7 +1,8 @@
 # RevNest Safe PMS Evidence
 
 This directory stores judge-facing evidence for the NemoClaw Safe PMS Approval
-demo. The current sandbox is `my-assistant`.
+demo. Use a fresh or reset judge sandbox named `revnest-judge` for final
+evidence so unrelated presets do not weaken the least-privilege story.
 
 ## One-Command Evidence Chain
 
@@ -45,10 +46,10 @@ python3 /home/asus/revnest/Claw/tests/run_full_hotel_agent_evidence_design.py --
 
 ## Fixed Security State
 
-The sandbox is locked with shields:
+Prepare the judge sandbox with the minimal policy:
 
 ```bash
-nemoclaw my-assistant shields status
+/home/asus/revnest/Claw/nemoclaw/prepare_judge_minimal_sandbox.sh revnest-judge
 ```
 
 Expected:
@@ -58,20 +59,19 @@ Shields: UP (lockdown active)
 Policy:  restrictive
 ```
 
-The `revnest-safe-pms` policy is active:
+The expected `policy-list` evidence has only `revnest-judge-minimal` active for
+the RevNest judge story. Do not show evidence with active Airbnb, npm, PyPI,
+Homebrew, Discord, Hugging Face, Slack, or Telegram presets.
 
-```bash
-nemoclaw my-assistant policy-list
-openshell policy get --full my-assistant
-```
-
-The policy allows only read-only MockHotel inspection from the sandbox:
+The minimal judge policy allows only:
 
 ```text
+GET/POST local inference on host.openshell.internal:11434, :11435, and :8000
+GET/POST NVIDIA inference endpoints on /v1 chat, completions, embeddings, models
 GET host.openshell.internal:3001/api/agent/current-prices
 ```
 
-Direct PMS writes are denied by OpenShell:
+Direct PMS writes remain denied by OpenShell:
 
 ```text
 POST host.openshell.internal:3001/api/prices
@@ -81,9 +81,12 @@ POST host.openshell.internal:3001/api/prices
 
 - `demo_transcript.md`
 - `samples/safe_pms_evidence_chain.json`
-- `logs/08_shields_status_after_lockdown.log`
-- `logs/09_sandbox_status_after_lockdown.log`
-- `logs/10_policy_list_after_lockdown.log`
-- `logs/11_openshell_policy_full_after_lockdown.yaml`
-- `logs/13_openshell_exec_direct_pms_write_probe_after_lockdown.log`
+- `logs/20_judge_minimal_policy_list.log`
+- `logs/21_judge_minimal_openshell_policy_full.yaml`
+- `logs/22_judge_minimal_shields_status.log`
+- `logs/23_judge_minimal_sandbox_status.log`
 - `logs/15_direct_pms_write_denied_concise.log`
+
+Legacy `08`-`11` lockdown logs were captured from an older `my-assistant`
+sandbox and may include extra active presets. Regenerate the judge logs above
+before presenting NemoClaw evidence.

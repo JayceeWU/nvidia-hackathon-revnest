@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 RevNest. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+preset:
+  name: revnest-judge-minimal
+  description: "RevNest judge policy: local/NVIDIA inference plus read-only MockHotel PMS inspection"
+
+network_policies:
+  revnest_judge_local_inference:
+    name: revnest_judge_local_inference
+    endpoints:
+      - host: host.openshell.internal
+        port: 11434
+        protocol: rest
+        enforcement: enforce
+        allowed_ips: &host_gateway_private_ips
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+      - host: host.openshell.internal
+        port: 11435
+        protocol: rest
+        enforcement: enforce
+        allowed_ips: *host_gateway_private_ips
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+      - host: host.openshell.internal
+        port: 8000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips: *host_gateway_private_ips
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+    binaries: &agent_binaries
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/local/bin/node }
+      - { path: /usr/bin/node }
+      - { path: /usr/bin/python3 }
+      - { path: /usr/local/bin/python3 }
+
+  revnest_judge_nvidia_inference:
+    name: revnest_judge_nvidia_inference
+    endpoints:
+      - host: integrate.api.nvidia.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/chat/completions" }
+          - allow: { method: POST, path: "/v1/completions" }
+          - allow: { method: POST, path: "/v1/embeddings" }
+          - allow: { method: GET, path: "/v1/models" }
+          - allow: { method: GET, path: "/v1/models/**" }
+      - host: inference-api.nvidia.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/chat/completions" }
+          - allow: { method: POST, path: "/v1/completions" }
+          - allow: { method: POST, path: "/v1/embeddings" }
+          - allow: { method: GET, path: "/v1/models" }
+          - allow: { method: GET, path: "/v1/models/**" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/bin/python3 }
+      - { path: /usr/local/bin/python3 }
+
+  revnest_judge_mockhotel_readonly:
+    name: revnest_judge_mockhotel_readonly
+    endpoints:
+      - host: host.openshell.internal
+        port: 3001
+        protocol: rest
+        enforcement: enforce
+        allowed_ips: *host_gateway_private_ips
+        rules:
+          - allow: { method: GET, path: "/api/agent/current-prices" }
+    binaries: *agent_binaries
+
+  # Intentionally absent from the judge policy:
+  # - Airbnb or Muscache hosts
+  # - npm, PyPI, Homebrew, GitHub, Hugging Face, Discord, Slack, Telegram
+  # - host.openshell.internal:3000 WebApp accept APIs
+  # - non-GET MockHotel APIs
+  # - MockHotel PostgreSQL ports
+  #
+  # The judge sandbox should show Revy can reason and inspect PMS prices while
+  # the live PMS write path remains outside the agent boundary.

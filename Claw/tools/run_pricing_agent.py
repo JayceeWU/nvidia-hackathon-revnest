@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shlex
+import signal
 from pathlib import Path, PurePosixPath
 import queue
 import shutil
@@ -37,11 +38,20 @@ DEFAULT_NEMOCLAW_SANDBOX = "my-assistant"
 DEFAULT_NEMOCLAW_WORKDIR = "/sandbox/RevNest/Claw"
 DEFAULT_RUNTIME_MODE = "split-demo"
 DEFAULT_OPENCLAW_AGENT = os.environ.get("REVNEST_OPENCLAW_AGENT", "main")
+DEFAULT_OPENCLAW_MODEL = os.environ.get("REVNEST_OPENCLAW_MODEL", "ollama-local/nemotron-3-super:latest")
 DEFAULT_OPENCLAW_MAX_ATTEMPTS = int(os.environ.get("REVNEST_OPENCLAW_MAX_ATTEMPTS", "2"))
-DEFAULT_OPENCLAW_IDLE_RETRY_SECONDS = int(os.environ.get("REVNEST_OPENCLAW_IDLE_RETRY_SECONDS", "60"))
+DEFAULT_OPENCLAW_IDLE_RETRY_SECONDS = int(os.environ.get("REVNEST_OPENCLAW_IDLE_RETRY_SECONDS", "180"))
+DEFAULT_OPENCLAW_FIRST_PROGRESS_SECONDS = int(os.environ.get("REVNEST_OPENCLAW_FIRST_PROGRESS_SECONDS", "180"))
+DEFAULT_HOST_STRATEGY_MEMORY_VENV = Path.home() / ".cache" / "strategy-memory" / "host-venv"
+DEFAULT_HOST_STRATEGY_MEMORY_MODEL = Path.home() / ".cache" / "strategy-memory" / "models" / "all-MiniLM-L6-v2"
+DEFAULT_HOST_STRATEGY_MEMORY_PGDATA = Path.home() / ".cache" / "strategy-memory" / "postgres"
+DEFAULT_NEMOCLAW_STRATEGY_MEMORY_VENV = "/tmp/revnest-strategy-memory/venv"
+DEFAULT_NEMOCLAW_STRATEGY_MEMORY_MODEL = "/tmp/revnest-strategy-memory/models/all-MiniLM-L6-v2"
+DEFAULT_NEMOCLAW_STRATEGY_MEMORY_PGDATA = "/tmp/revnest-strategy-memory/postgres"
+DEFAULT_AGENT_BROWSER_ARGS = "--no-sandbox,--disable-dev-shm-usage"
 WORKFLOW_NAME = "pricing-workflow"
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
-LIFECYCLE_STAGES = {"agent_start", "agent_finish", "wrapper_retry"}
+LIFECYCLE_STAGES = {"agent_start", "agent_finish", "wrapper_retry", "wrapper_recovery"}
 
 US_STATE_CODES = {
     "alabama": "AL",
@@ -1071,6 +1081,16 @@ def has_business_progress(log_path: Path, run_id: str) -> bool:
     return any(event.get("stage") not in LIFECYCLE_STAGES for event in progress_events_for_run(log_path, run_id))
 
 
+def business_progress_count(log_path: Path, run_id: str) -> int:
+    return sum(1 for event in progress_events_for_run(log_path, run_id) if event.get("stage") not in LIFECYCLE_STAGES)
+
+
+def attempt_session_id(base_session_id: str, attempt: int) -> str:
+    if attempt <= 1:
+        return base_session_id
+    return f"{base_session_id}-attempt-{attempt}"
+
+
 class RuntimeSetupError(RuntimeError):
     pass
 
@@ -1079,10 +1099,102 @@ def find_executable(name: str, env: dict[str, str]) -> str | None:
     found = shutil.which(name, path=env.get("PATH"))
     if found:
         return found
+    npm_global_bin = Path.home() / ".npm-global" / "bin" / name
+    if npm_global_bin.exists() and os.access(npm_global_bin, os.X_OK):
+        return str(npm_global_bin)
     local_bin = Path.home() / ".local" / "bin" / name
     if local_bin.exists() and os.access(local_bin, os.X_OK):
         return str(local_bin)
     return None
+
+
+def env_with_local_bins(env: dict[str, str]) -> dict[str, str]:
+    local_bins = [Path.home() / ".npm-global" / "bin", Path.home() / ".local" / "bin"]
+    existing = env.get("PATH", "")
+    prefixes = [str(path) for path in local_bins if path.exists()]
+    if not prefixes:
+        return dict(env)
+    updated = dict(env)
+    updated["PATH"] = ":".join(prefixes + ([existing] if existing else []))
+    return updated
+
+
+def candidate_browser_paths(env: dict[str, str]) -> list[Path]:
+    candidates: list[Path] = []
+    for key in ("REVNEST_BROWSER_EXECUTABLE_PATH", "AGENT_BROWSER_EXECUTABLE_PATH", "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"):
+        value = env.get(key)
+        if value:
+            candidates.append(Path(value).expanduser())
+
+    playwright_cache = Path.home() / ".cache" / "ms-playwright"
+    if playwright_cache.exists():
+        candidates.extend(sorted(playwright_cache.glob("chromium-*/chrome-linux/chrome"), reverse=True))
+        candidates.extend(sorted(playwright_cache.glob("chromium_headless_shell-*/chrome-linux/headless_shell"), reverse=True))
+
+    for value in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"):
+        candidates.append(Path(value))
+    return candidates
+
+
+def find_browser_executable(env: dict[str, str]) -> str | None:
+    for candidate in candidate_browser_paths(env):
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def merge_browser_args(existing: str | None) -> str:
+    values: list[str] = []
+    for raw in (existing or "").replace("\n", ",").split(","):
+        value = raw.strip()
+        if value:
+            values.append(value)
+    for required in DEFAULT_AGENT_BROWSER_ARGS.split(","):
+        if required not in values:
+            values.append(required)
+    return ",".join(values)
+
+
+def configure_airbnb_browser_runtime(
+    *,
+    args: argparse.Namespace,
+    data: dict,
+    runtime_env: dict[str, str],
+) -> None:
+    if args.property_type != "airbnb":
+        return
+
+    if not find_executable("agent-browser", runtime_env):
+        raise RuntimeSetupError(
+            "Airbnb pricing-context requires the agent-browser CLI, but it was not found. "
+            "Install it with `npm install -g agent-browser` and try Run Revy again."
+        )
+
+    browser_executable = find_browser_executable(runtime_env)
+    if not browser_executable:
+        raise RuntimeSetupError(
+            "Airbnb pricing-context requires a local Chromium/Chrome executable, but none was found. "
+            "On this Linux ARM64 host, run `npx playwright install chromium`, or set "
+            "REVNEST_BROWSER_EXECUTABLE_PATH to a Chromium binary, then try Run Revy again."
+        )
+
+    runtime_env.setdefault("AGENT_BROWSER_EXECUTABLE_PATH", browser_executable)
+    runtime_env["AGENT_BROWSER_ARGS"] = merge_browser_args(runtime_env.get("AGENT_BROWSER_ARGS"))
+    runtime_env.setdefault("AGENT_BROWSER_IGNORE_HTTPS_ERRORS", "1")
+
+    browser = data.setdefault("browser", {})
+    browser.update(
+        {
+            "enabled": True,
+            "executablePath": browser_executable,
+            "headless": True,
+            "noSandbox": True,
+        }
+    )
+    extra_args = set(browser.get("extraArgs") or [])
+    for value in ("--no-sandbox", "--disable-dev-shm-usage", "--ignore-certificate-errors"):
+        extra_args.add(value)
+    browser["extraArgs"] = sorted(extra_args)
 
 
 def run_setup_command(cmd: list[str], env: dict[str, str]) -> str:
@@ -1238,6 +1350,126 @@ def message_args_for_runtime(args: argparse.Namespace) -> argparse.Namespace:
     return message_args
 
 
+def source_openclaw_config_path(env: dict[str, str]) -> Path:
+    if env.get("OPENCLAW_CONFIG_PATH"):
+        return Path(env["OPENCLAW_CONFIG_PATH"]).expanduser()
+    if env.get("OPENCLAW_STATE_DIR"):
+        candidate = Path(env["OPENCLAW_STATE_DIR"]).expanduser() / "openclaw.json"
+        if candidate.exists():
+            return candidate
+    return Path.home() / ".openclaw" / "openclaw.json"
+
+
+def source_openclaw_state_dir(env: dict[str, str], config_path: Path) -> Path:
+    if env.get("OPENCLAW_STATE_DIR"):
+        return Path(env["OPENCLAW_STATE_DIR"]).expanduser()
+    if config_path.name == "openclaw.json":
+        return config_path.parent
+    return Path.home() / ".openclaw"
+
+
+def link_runtime_dependency(source: Path, target: Path) -> None:
+    if not source.exists() or target.exists():
+        return
+    try:
+        target.symlink_to(source, target_is_directory=source.is_dir())
+    except OSError:
+        return
+
+
+def revnest_mcp_python() -> Path:
+    venv_python = ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists() and os.access(venv_python, os.X_OK):
+        return venv_python
+    return Path(sys.executable)
+
+
+def prepare_host_openclaw_runtime(
+    *,
+    args: argparse.Namespace,
+    env: dict[str, str],
+) -> dict[str, str]:
+    runtime_env = env_with_local_bins(env)
+    source_config = source_openclaw_config_path(env)
+    source_state = source_openclaw_state_dir(env, source_config)
+    data: dict = {}
+    if source_config.exists():
+        data = json.loads(source_config.read_text(encoding="utf-8"))
+
+    runtime_dir = Path(tempfile.gettempdir()) / f"revnest-openclaw-host-runtime-{safe_path_slug(args.session_id)}"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "agents").mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "home" / ".openclaw").mkdir(parents=True, exist_ok=True)
+    link_runtime_dependency(source_state / "plugin-runtime-deps", runtime_dir / "plugin-runtime-deps")
+
+    agents = data.setdefault("agents", {})
+    defaults = agents.setdefault("defaults", {})
+    defaults["workspace"] = str(ROOT)
+    agent_dir = runtime_dir / "agents" / args.agent / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    source_agent_dir = source_state / "agents" / args.agent / "agent"
+    for file_name in ("auth-profiles.json", "auth-state.json", "models.json"):
+        link_runtime_dependency(source_agent_dir / file_name, agent_dir / file_name)
+    entry = {"id": args.agent, "default": True, "workspace": str(ROOT), "agentDir": str(agent_dir)}
+    agents["list"] = [entry] + [item for item in agents.get("list", []) if item.get("id") != args.agent]
+
+    tools = data.setdefault("tools", {})
+    exec_tool = dict(tools.get("exec") or {})
+    exec_tool.update({"host": "auto", "security": "full", "ask": "off"})
+    tools["exec"] = exec_tool
+
+    mcp = data.setdefault("mcp", {})
+    servers = mcp.setdefault("servers", {})
+    database_url = database_url_from(env)
+    servers["revnest-revenue-tools"] = {
+        "command": str(revnest_mcp_python()),
+        "args": [str(ROOT / "tools" / "revnest_mcp_server.py")],
+        "env": {
+            "DATABASE_URL": database_url,
+            "CLAW_DATABASE_URL": database_url,
+        },
+    }
+    servers["strategy-memory"] = {
+        "command": str(ROOT / "skills" / "strategy-memory" / "scripts" / "run_mcp.sh"),
+        "args": [],
+        "env": {
+            "STRATEGY_MEMORY_DATABASE_URL": database_url,
+            "STRATEGY_MEMORY_VENV": env.get("REVNEST_STRATEGY_MEMORY_VENV", str(DEFAULT_HOST_STRATEGY_MEMORY_VENV)),
+            "STRATEGY_MEMORY_MODEL": env.get("REVNEST_STRATEGY_MEMORY_MODEL", str(DEFAULT_HOST_STRATEGY_MEMORY_MODEL)),
+            "STRATEGY_MEMORY_MODEL_CACHE": str(DEFAULT_HOST_STRATEGY_MEMORY_MODEL.parent),
+            "STRATEGY_MEMORY_PGDATA": env.get("REVNEST_STRATEGY_MEMORY_PGDATA", str(DEFAULT_HOST_STRATEGY_MEMORY_PGDATA)),
+            "STRATEGY_MEMORY_SKIP_POSTGRES_START": env.get("REVNEST_STRATEGY_MEMORY_SKIP_POSTGRES_START", "1"),
+            "STRATEGY_MEMORY_TOP_K": "8",
+            "STRATEGY_MEMORY_MIN_SCORE": "0.22",
+        },
+        "connectionTimeoutMs": 60000,
+    }
+
+    plugins = data.get("plugins", {}).get("entries", {})
+    plugins.pop("openclaw-web-search", None)
+    plugins.get("openclaw-weixin", {}).update({"enabled": False})
+    data.get("plugins", {}).get("installs", {}).pop("openclaw-weixin", None)
+    discord = data.get("channels", {}).get("discord")
+    if discord and not env.get("DISCORD_BOT_TOKEN"):
+        discord.update({"enabled": False})
+
+    configure_airbnb_browser_runtime(args=args, data=data, runtime_env=runtime_env)
+
+    (runtime_dir / "home" / ".openclaw" / "exec-approvals.json").write_text(
+        json.dumps({"version": 1, "defaults": {"security": "full", "ask": "off", "askFallback": "full"}, "agents": {}}),
+        encoding="utf-8",
+    )
+    config_path = runtime_dir / "openclaw.json"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    runtime_env["OPENCLAW_STATE_DIR"] = str(runtime_dir)
+    runtime_env["OPENCLAW_CONFIG_PATH"] = str(config_path)
+    runtime_env["HOME"] = str(runtime_dir / "home")
+    runtime_env["REVNEST_AGENT_ACTIVE_RUN_ID"] = args.run_id
+    print(f"[wrapper] Using isolated host OpenClaw runtime at {runtime_dir}.", flush=True)
+    return runtime_env
+
+
 def prepare_openclaw_command(
     *,
     args: argparse.Namespace,
@@ -1254,10 +1486,12 @@ def prepare_openclaw_command(
                 "Use --runtime-mode nemoclaw or install/run OpenClaw on the host."
             )
         print("[wrapper] Running OpenClaw on the host runtime.", flush=True)
-        return [openclaw_bin, "agent", *agent_options, "--message", message], env
+        host_env = prepare_host_openclaw_runtime(args=args, env=env)
+        return [openclaw_bin, "agent", *agent_options, "--message", message], host_env
 
     if openclaw_bin and not args.force_nemoclaw:
-        return [openclaw_bin, "agent", *agent_options, "--message", message], env
+        host_env = prepare_host_openclaw_runtime(args=args, env=env)
+        return [openclaw_bin, "agent", *agent_options, "--message", message], host_env
 
     openshell_bin = find_executable("openshell", env)
     if not openshell_bin:
@@ -1293,7 +1527,7 @@ def prepare_openclaw_command(
         "defaults=agents.setdefault('defaults',{});"
         "defaults['workspace']=workdir;"
         "tools=data.setdefault('tools',{});"
-        "tools['exec']={'host':'auto','security':'full','ask':'off','askFallback':'full'};"
+        "tools['exec']={'host':'auto','security':'full','ask':'off'};"
         "approval_dir=runtime/'home'/'.openclaw';"
         "approval_dir.mkdir(parents=True,exist_ok=True);"
         "(approval_dir/'exec-approvals.json').write_text(json.dumps({'version':1,'defaults':{'security':'full','ask':'off','askFallback':'full'},'agents':{}}));"
@@ -1303,7 +1537,7 @@ def prepare_openclaw_command(
         "strategy=data.get('mcp',{}).get('servers',{}).get('strategy-memory');"
         "env=strategy.setdefault('env',{}) if strategy else None;"
         "strategy and strategy.update({'command':workdir+'/skills/strategy-memory/scripts/run_mcp.sh'});"
-        "env is not None and env.update({'STRATEGY_MEMORY_VENV':str(runtime/'venvs'/'strategy-memory'),'STRATEGY_MEMORY_MODEL':str(runtime/'cache'/'strategy-memory'/'models'/'all-MiniLM-L6-v2')});"
+        f"env is not None and env.update({{'STRATEGY_MEMORY_VENV':os.environ.get('REVNEST_STRATEGY_MEMORY_VENV',{DEFAULT_NEMOCLAW_STRATEGY_MEMORY_VENV!r}),'STRATEGY_MEMORY_MODEL':os.environ.get('REVNEST_STRATEGY_MEMORY_MODEL',{DEFAULT_NEMOCLAW_STRATEGY_MEMORY_MODEL!r}),'STRATEGY_MEMORY_MODEL_CACHE':{str(PurePosixPath(DEFAULT_NEMOCLAW_STRATEGY_MEMORY_MODEL).parent)!r},'STRATEGY_MEMORY_PGDATA':os.environ.get('REVNEST_STRATEGY_MEMORY_PGDATA',{DEFAULT_NEMOCLAW_STRATEGY_MEMORY_PGDATA!r}),'STRATEGY_MEMORY_SKIP_POSTGRES_START':os.environ.get('REVNEST_STRATEGY_MEMORY_SKIP_POSTGRES_START','1')}});"
         "plugins=data.get('plugins',{}).get('entries',{});"
         "plugins.get('openclaw-weixin',{}).update({'enabled':False});"
         "data.get('plugins',{}).get('installs',{}).pop('openclaw-weixin',None);"
@@ -1320,6 +1554,7 @@ def prepare_openclaw_command(
         'export OPENCLAW_STATE_DIR="$runtime_dir"; '
         'export OPENCLAW_CONFIG_PATH="$runtime_dir/openclaw.json"; '
         'export HOME="$runtime_dir/home"; '
+        f'export REVNEST_AGENT_ACTIVE_RUN_ID={shlex.quote(args.run_id)}; '
         'export PATH="/tmp/npm-global/bin:${PATH:-}"; '
         'export NODE_PATH="/sandbox/RevNest/Claw/node_modules:/tmp/npm-global/lib/node_modules:${NODE_PATH:-}"; '
         'msg_file=$1; shift; exec openclaw agent "$@" --message "$(cat "$msg_file")"'
@@ -1355,8 +1590,8 @@ def build_context_instructions(args: argparse.Namespace) -> str:
 - Do not invoke the pricing-context skill and do not run agent-browser.
 - Use the supplied room_type_properties_json as the canonical property memory for all room types in this batch.
 - market_anchor_property_id is "{args.market_anchor_property_id}" only for shared market-data persistence and location anchoring; final writes must target each room type's own property_id.
-- Before downstream tools, append progress. Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", stage `context`, status `started`, message "Starting hotel all-room-types property memory collection", tool "postgres/property-memory", and metadata containing hotel_scope and property_ids. CLI fallback:
-  python3 tools/progress_logger.py log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --stage context --status started --message "Starting hotel all-room-types property memory collection" --tool "postgres/property-memory" --metadata-json '{{"hotel_scope":"all-room-types","property_ids":{property_ids_json}}}'
+- Before downstream tools, append progress to log_path "{args.log_path}". Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", stage `context`, status `started`, message "Starting hotel all-room-types property memory collection", tool "postgres/property-memory", metadata containing hotel_scope and property_ids, and log_path "{args.log_path}". CLI fallback:
+  python3 tools/progress_logger.py --log-path "{args.log_path}" log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --stage context --status started --message "Starting hotel all-room-types property memory collection" --tool "postgres/property-memory" --metadata-json '{{"hotel_scope":"all-room-types","property_ids":{property_ids_json}}}'
 - Extract shared hotel market/location once, then preserve each room type's room_count, capacity, bed/view/amenity tier, min/max guardrails, and pricing_horizon.
 - Log context completed with metadata containing hotel_scope, account_id, market_anchor_property_id, and every room type property_id.
 """
@@ -1365,8 +1600,8 @@ def build_context_instructions(args: argparse.Namespace) -> str:
         return f"""Hotel property-memory mode:
 - Do not invoke the pricing-context skill and do not run agent-browser.
 - Load property memory for property_id "{args.property_id}" from PostgreSQL property.data and recent pricing_record rows when useful.
-- Before downstream tools, append progress. Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", stage `context`, status `started`, message "Starting hotel property memory collection", and tool "postgres/property-memory". CLI fallback:
-  python3 tools/progress_logger.py log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --stage context --status started --message "Starting hotel property memory collection" --tool "postgres/property-memory"
+- Before downstream tools, append progress to log_path "{args.log_path}". Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", stage `context`, status `started`, message "Starting hotel property memory collection", tool "postgres/property-memory", and log_path "{args.log_path}". CLI fallback:
+  python3 tools/progress_logger.py --log-path "{args.log_path}" log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --stage context --status started --message "Starting hotel property memory collection" --tool "postgres/property-memory"
 - Extract location/market, room type, room count, capacity, ADR/RevPAR baseline, amenities, occupancy, and guardrail notes from property memory.
 - Log a context info event with substage "property_memory" and compact metadata including property_id, property_type, account_id, and location.
 - Log context completed after extracting usable hotel facts.
@@ -1381,22 +1616,22 @@ def build_context_instructions(args: argparse.Namespace) -> str:
     return f"""Airbnb pricing-context mode with redundant browser verification:
 - Invoke the pricing-context skill because property_type is airbnb.
 - Use input exactly as my_place "{args.my_place}", property_id "{args.property_id}", and account_id "{args.account_id}".
-- Before doing browser work, append progress. Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", called_skill "pricing-context", stage `context`, status `started`, message "Starting Airbnb pricing browser context collection", and tool "agent-browser". CLI fallback:
-  python3 tools/progress_logger.py log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "pricing-context" --stage context --status started --message "Starting Airbnb pricing browser context collection" --tool "agent-browser"
+- Before doing browser work, append progress to log_path "{args.log_path}". Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", called_skill "pricing-context", stage `context`, status `started`, message "Starting Airbnb pricing browser context collection", tool "agent-browser", and log_path "{args.log_path}". CLI fallback:
+  python3 tools/progress_logger.py --log-path "{args.log_path}" log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "pricing-context" --stage context --status started --message "Starting Airbnb pricing browser context collection" --tool "agent-browser"
 - Primary read: use the isolated agent-browser session "{args.run_id}":
   agent-browser --session "{args.run_id}" open "{args.my_place}"
   agent-browser --session "{args.run_id}" wait --load networkidle
   agent-browser --session "{args.run_id}" get url --json
   agent-browser --session "{args.run_id}" get title --json
   agent-browser --session "{args.run_id}" snapshot --json
-- Secondary read: use OpenClaw built-in Browser with the managed openclaw profile:
-  openclaw browser --browser-profile openclaw status --json
-  openclaw browser --browser-profile openclaw start --json
-  openclaw browser --browser-profile openclaw open "{args.my_place}" --json
-  openclaw browser --browser-profile openclaw wait --load networkidle --json
-  openclaw browser --browser-profile openclaw snapshot --interactive --json
+- Secondary fallback only if agent-browser is unavailable or fails: use OpenClaw built-in Browser with the managed openclaw profile:
+  openclaw browser --browser-profile openclaw --json status
+  openclaw browser --browser-profile openclaw --json start
+  openclaw browser --browser-profile openclaw --json open "{args.my_place}"
+  openclaw browser --browser-profile openclaw --json wait --load networkidle
+  openclaw browser --browser-profile openclaw --json snapshot --interactive
 - If one browser method fails or is unavailable, repeat the successful method after reload/wait and compare the two successful reads. Continue only when two reads agree on listing identity and do not conflict on capacity, city/state, bed, or bath.
-- Prefer the OpenClaw managed openclaw profile. Use an existing user/Chrome browser profile only when signed-in browser state is explicitly needed.
+- Prefer the host `agent-browser` session in this RevNest runtime. Use an existing user/Chrome browser profile only when signed-in browser state is explicitly needed.
 - If my_place contains /rooms/<room_id>, every successful final URL must still contain that room id. If not, log context as failed and stop before location-based tools.
 - Extract capacity, zip_code, county, state, city, bed, bath, and other_info. other_info must summarize review signals, amenities/facilities, image/photo count, listing quality, and caveats outside the structured fields.
 - Write extracted fields to property columns and merge JSON keys capacity, zipCode, county, state, city, bed, bath, otherInfo, plus beds/bathroom aliases when known.
@@ -1441,6 +1676,17 @@ def build_pricing_decision_loop_instructions(property_type: str, pricing_start_d
 """
 
 
+def build_execution_contract(args: argparse.Namespace) -> str:
+    return f"""Execution contract:
+- This is a fresh live run. Do not summarize a workflow as completed until you have actually called tools and observed their outputs.
+- Your first action must be a real tool/exec action that writes an observable progress event for run_id "{args.run_id}" to log_path "{args.log_path}". Prefer `revnest-revenue-tools.log_progress` with log_path "{args.log_path}"; if MCP tools are unavailable, run the CLI fallback with `python3 tools/progress_logger.py --log-path "{args.log_path}" log ...`. The `--log-path` flag must appear before the `log` subcommand.
+- Never call `tools/run_pricing_agent.py`, `python3 tools/run_pricing_agent.py`, or another OpenClaw agent from inside this run. This wrapper is the outer launcher only. Use the concrete stage tools listed below.
+- Never say `log_progress`, `revpar_estimate.py`, `pricing_decision_calculator.py`, `review_hotel_price_adjustments`, or any database write succeeded unless the tool call returned success in this run.
+- If tool execution is unavailable, answer exactly `TOOL_EXECUTION_UNAVAILABLE` and stop. Do not invent progress, prices, pending tasks, conversations, or database writes.
+- Final answer is allowed only after durable outputs exist: progress events plus Airbnb `property_price`/`revy_conversation` writes, or hotel `property_price` forecasts plus pending approval tasks.
+"""
+
+
 def build_hotel_batch_message(
     args: argparse.Namespace,
     pricing_start_date: str,
@@ -1460,7 +1706,9 @@ def build_hotel_batch_message(
     anchor_capacity = anchor_property.get("capacity") or "<guest capacity if known>"
     room_type_count = len(room_type_properties)
 
-    return f"""Use the `{WORKFLOW_NAME}` skill as the primary workflow. Run the hotel all-room-types batch branch: context, per-room-type pricing-guardrails, one shared pricing-market-data fan-out, pricing-decision-reasoning, then pricing-output-publisher for each room type.
+    return f"""{build_execution_contract(args)}
+
+Use the `{WORKFLOW_NAME}` skill as the primary workflow. Run the hotel all-room-types batch branch: context, per-room-type pricing-guardrails, one shared pricing-market-data fan-out, pricing-decision-reasoning, then pricing-output-publisher for each room type.
 
 property_type: hotel
 hotel_scope: all-room-types
@@ -1480,10 +1728,10 @@ room_type_properties_json:
 
 {build_context_instructions(args)}
 
-Then report `started`, `completed`, `skipped`, or `failed` before and after every major stage. Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", optional called_skill, stage, status, message, and exact tool. CLI fallback:
-python3 tools/progress_logger.py log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "<called skill if any>" --stage "<stage>" --status "<status>" --message "<short message>" --tool "<exact tool>"
+Then report `started`, `completed`, `skipped`, or `failed` before and after every major stage. Every progress event must be written to log_path "{args.log_path}". Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", optional called_skill, stage, status, message, exact tool, and log_path "{args.log_path}". CLI fallback:
+python3 tools/progress_logger.py --log-path "{args.log_path}" log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "<called skill if any>" --stage "<stage>" --status "<status>" --message "<short message>" --tool "<exact tool>"
 
-During pricing_decision, stream compact observable decision-trace events with status "info" and --substage values: supply_snapshot, demand_snapshot, supply_demand_synthesis, occupancy_input, occupancy_python_run, occupancy_result, strategy_memory_initial, signal_table, comp_relevance, demand_assessment, property_fit, guardrail_check, calculator_input, calculator_run, strategy_memory_review, strategy_correction, final_reasoning_verification, raw_price, guardrail_application, confidence, final_calendar. Do not log hidden chain-of-thought or long deliberation.
+During pricing_decision, stream compact observable decision-trace events to log_path "{args.log_path}" with status "info" and --substage values: supply_snapshot, demand_snapshot, supply_demand_synthesis, occupancy_input, occupancy_python_run, occupancy_result, strategy_memory_initial, signal_table, comp_relevance, demand_assessment, property_fit, guardrail_check, calculator_input, calculator_run, strategy_memory_review, strategy_correction, final_reasoning_verification, raw_price, guardrail_application, confidence, final_calendar. Do not log hidden chain-of-thought or long deliberation.
 
 Money unit rule: all visible prices, ADR, RevPAR, and revenue are USD dollars. If a DB or tool field ends in _cents, divide by 100 before using it in logs or explanations.
 
@@ -1492,7 +1740,7 @@ Use exact tool names, not the workflow name. For hotels do not call pricing-cont
 Guardrails: run `tools/guardrail_review.py` separately for every object in room_type_properties_json. Use that room type's own property_id, min_price, max_price, capacity, room_count, bed/bath/view/amenity metadata, and market. If a room type is constrained by its guardrails, carry that caveat into the final summary for that specific property_id.
 
 Market data: run the local shared fan-out exactly once for the hotel market. Start it with:
-python3 tools/run_parallel_market_data.py --run-id "{args.run_id}" --account-id "{args.account_id}" --property-id "{market_anchor_property_id}" --summary-property-ids-json '{summary_property_ids_json}' --log-path "{args.log_path}" --property-type "hotel" --address "{market_address}" --start-date "{pricing_start_date}" --pricing-horizon "{args.pricing_horizon}" --capacity "{anchor_capacity}"
+python3 tools/run_parallel_market_data.py --run-id "{args.run_id}" --account-id "{args.account_id}" --property-id "{market_anchor_property_id}" --summary-property-ids-json '{summary_property_ids_json}' --log-path "{args.log_path}" --property-type "hotel" --address "{market_address}" --start-date "{pricing_start_date}" --pricing-horizon "{args.pricing_horizon}" --capacity "{anchor_capacity}" --stdout-mode summary
 
 This helper owns weather, holidays, Ticketmaster events, SerpApi events, SerpApi hotel/vacation-rental comps, Tavily tourism-demand fan-out, shared `market_data_summary` writes for all room type property_ids, one `hotel_home_dashboard` update, and the combined JSON under `runs/{args.run_id}-market-data.json`. Do not run those local market tools per room type unless retrying one failed/skipped shared source.
 
@@ -1521,7 +1769,9 @@ def build_message(args: argparse.Namespace) -> str:
     conversation_user_message_json = json.dumps(conversation_user_message, ensure_ascii=False)
     if args.property_type == "hotel" and getattr(args, "hotel_scope", "room-type") == "all-room-types":
         return build_hotel_batch_message(args, pricing_start_date, pricing_timezone, pricing_timezone_source)
-    return f"""Use the `{WORKFLOW_NAME}` skill as the primary workflow. Follow the installed skill structure exactly: context, pricing-guardrails, pricing-market-data, pricing-decision-reasoning, then pricing-output-publisher.
+    return f"""{build_execution_contract(args)}
+
+Use the `{WORKFLOW_NAME}` skill as the primary workflow. Follow the installed skill structure exactly: context, pricing-guardrails, pricing-market-data, pricing-decision-reasoning, then pricing-output-publisher.
 
 property_type: {args.property_type}
 account_id: {args.account_id}
@@ -1536,10 +1786,10 @@ pricing_timezone_source: {pricing_timezone_source}
 {place_line}
 {build_context_instructions(args)}
 
-Then report `started`, `completed`, `skipped`, or `failed` before and after every major stage. Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", optional called_skill, stage, status, message, and exact tool. CLI fallback:
-python3 tools/progress_logger.py log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "<called skill if any>" --stage "<stage>" --status "<status>" --message "<short message>" --tool "<exact tool>"
+Then report `started`, `completed`, `skipped`, or `failed` before and after every major stage. Every progress event must be written to log_path "{args.log_path}". Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", optional called_skill, stage, status, message, exact tool, and log_path "{args.log_path}". CLI fallback:
+python3 tools/progress_logger.py --log-path "{args.log_path}" log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "<called skill if any>" --stage "<stage>" --status "<status>" --message "<short message>" --tool "<exact tool>"
 
-During pricing_decision, also stream observable decision-trace events with status "info" and --substage values: supply_snapshot, demand_snapshot, supply_demand_synthesis, occupancy_input, occupancy_python_run, occupancy_result, strategy_memory_initial, signal_table, comp_relevance, demand_assessment, property_fit, guardrail_check, calculator_input, calculator_run, strategy_memory_review, strategy_correction, final_reasoning_verification, raw_price, guardrail_application, confidence, final_calendar. Log compact facts/classifications/metrics only; do not log hidden chain-of-thought or long deliberation.
+During pricing_decision, also stream observable decision-trace events to log_path "{args.log_path}" with status "info" and --substage values: supply_snapshot, demand_snapshot, supply_demand_synthesis, occupancy_input, occupancy_python_run, occupancy_result, strategy_memory_initial, signal_table, comp_relevance, demand_assessment, property_fit, guardrail_check, calculator_input, calculator_run, strategy_memory_review, strategy_correction, final_reasoning_verification, raw_price, guardrail_application, confidence, final_calendar. Log compact facts/classifications/metrics only; do not log hidden chain-of-thought or long deliberation.
 
 Money unit rule: all user-visible prices, ADR, RevPAR, and revenue must be in USD dollars. Do not report cents in progress logs or final summaries. If a tool or SQL field ends in _cents, divide by 100 before describing it. In CLI fallback progress-log --message strings, prefer "USD 800/night" instead of "$800/night" to avoid shell variable expansion.
 
@@ -1550,7 +1800,7 @@ When pricing-workflow invokes another skill, set --skill "{WORKFLOW_NAME}" and -
 Use the `pricing-guardrails` skill immediately after context. Run tools/guardrail_review.py with min_price, max_price, capacity, bedrooms, beds, bathrooms, property type, and market when those facts are available. If property size is unavailable, log guardrail_review as skipped and continue with lower confidence. If the listing or room type appears capped too low, warn that the returned price is constrained by host guardrails and recommend reviewing a higher min/max range. Do not silently present a capped price as market-optimal.
 
 Use the `pricing-market-data` skill after context and guardrail_review. Start local fan-out/fan-in by running:
-python3 tools/run_parallel_market_data.py --run-id "{args.run_id}" --account-id "{args.account_id}" --property-id "{args.property_id}" --log-path "{args.log_path}" --property-type "{args.property_type}" --address "<verified_location_or_hotel_market>" --start-date "{pricing_start_date}" --pricing-horizon "{args.pricing_horizon}" --capacity "<guest capacity>" --bedrooms "<bedroom count>" --bathrooms "<bathroom count>"
+python3 tools/run_parallel_market_data.py --run-id "{args.run_id}" --account-id "{args.account_id}" --property-id "{args.property_id}" --log-path "{args.log_path}" --property-type "{args.property_type}" --address "<verified_location_or_hotel_market>" --start-date "{pricing_start_date}" --pricing-horizon "{args.pricing_horizon}" --capacity "<guest capacity>" --bedrooms "<bedroom count>" --bathrooms "<bathroom count>" --stdout-mode summary
 
 Omit optional capacity/bedrooms/bathrooms flags only if that fact is genuinely unknown. This helper owns the local pricing-weather, pricing-holidays, pricing-events, pricing-competitors, and pricing-tourism-demand fan-out, writes child stage progress events, writes one `market_data_summary` row after each source finishes, upserts `hotel_home_dashboard` for hotel runs, and saves a combined JSON file under `runs/{args.run_id}-market-data.json`. Use that JSON, the persisted source summaries, and for hotel runs the persisted dashboard payload as the main market-data input for `pricing-decision-reasoning`. Do not call those local Python tools one-by-one unless the helper itself fails or you are explicitly retrying one failed/skipped stage.
 
@@ -1584,12 +1834,169 @@ def reader_thread(pipe, output_queue: queue.Queue[str]) -> None:
         pipe.close()
 
 
+def stop_process_tree(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        proc.terminate()
+    try:
+        proc.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        proc.kill()
+    proc.wait(timeout=10)
+
+
+def nemoclaw_command_details(cmd: list[str]) -> tuple[str, str] | None:
+    if len(cmd) < 4 or "sandbox" not in cmd[:3] or "exec" not in cmd[:4]:
+        return None
+    sandbox = None
+    for index, part in enumerate(cmd):
+        if part in {"-n", "--name"} and index + 1 < len(cmd):
+            sandbox = cmd[index + 1]
+            break
+    runtime_dir = None
+    for part in cmd:
+        match = re.search(r"runtime_dir=([^;\s]+)", part)
+        if match:
+            runtime_dir = match.group(1).strip("'\"")
+            break
+    if not sandbox or not runtime_dir:
+        return None
+    return sandbox, runtime_dir
+
+
+def cleanup_nemoclaw_runtime(cmd: list[str], env: dict[str, str]) -> None:
+    details = nemoclaw_command_details(cmd)
+    if not details:
+        return
+    sandbox, runtime_dir = details
+    openshell_bin = cmd[0]
+    cleanup_script = r'''
+set -eu
+runtime_dir="$1"
+pids=""
+for envfile in /proc/[0-9]*/environ; do
+  pid="${envfile%/environ}"
+  pid="${pid##*/}"
+  if tr '\0' '\n' < "$envfile" 2>/dev/null | grep -Fxq "OPENCLAW_STATE_DIR=$runtime_dir"; then
+    pids="$pids $pid"
+  fi
+done
+if [ -n "$pids" ]; then
+  kill -TERM $pids 2>/dev/null || true
+  sleep 2
+  kill -KILL $pids 2>/dev/null || true
+fi
+'''
+    subprocess.run(
+        [
+            openshell_bin,
+            "sandbox",
+            "exec",
+            "-n",
+            sandbox,
+            "--timeout",
+            "20",
+            "--no-tty",
+            "--",
+            "/bin/bash",
+            "-lc",
+            cleanup_script,
+            "cleanup-nemoclaw-runtime",
+            runtime_dir,
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+
+
+def openclaw_session_parts(cmd: list[str], env: dict[str, str]) -> tuple[Path, str, str] | None:
+    state_dir = env.get("OPENCLAW_STATE_DIR")
+    if not state_dir:
+        return None
+    session_id = None
+    agent_id = DEFAULT_OPENCLAW_AGENT
+    for index, part in enumerate(cmd):
+        if part == "--session-id" and index + 1 < len(cmd):
+            session_id = cmd[index + 1]
+        elif part == "--agent" and index + 1 < len(cmd):
+            agent_id = cmd[index + 1]
+    if not session_id:
+        return None
+    return Path(state_dir), agent_id, session_id
+
+
+def openclaw_session_file(cmd: list[str], env: dict[str, str]) -> Path | None:
+    parts = openclaw_session_parts(cmd, env)
+    if not parts:
+        return None
+    state_dir, agent_id, session_id = parts
+    return state_dir / "agents" / agent_id / "sessions" / f"{session_id}.jsonl"
+
+
+def path_signature(path: Path | None) -> tuple[int, int] | None:
+    if not path:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def openclaw_activity_signature(cmd: list[str], env: dict[str, str]) -> tuple[tuple[str, int, int], ...]:
+    parts = openclaw_session_parts(cmd, env)
+    if not parts:
+        return ()
+    state_dir, agent_id, session_id = parts
+    sessions_dir = state_dir / "agents" / agent_id / "sessions"
+    candidates = [
+        sessions_dir / f"{session_id}.jsonl",
+        sessions_dir / f"{session_id}.trajectory.jsonl",
+        sessions_dir / f"{session_id}.trajectory-path.json",
+        sessions_dir / "sessions.json",
+    ]
+    if sessions_dir.exists():
+        candidates.extend(sessions_dir.glob(f"{session_id}*.jsonl"))
+        candidates.extend(sessions_dir.glob(f"{session_id}*.json"))
+
+    signatures: list[tuple[str, int, int]] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signatures.append((str(path), stat.st_size, stat.st_mtime_ns))
+    return tuple(sorted(signatures))
+
+
 def run_openclaw(
     cmd: list[str],
     env: dict[str, str],
     timeout_seconds: int,
     idle_timeout_seconds: int,
+    first_progress_timeout_seconds: int,
     log_path: Path,
+    run_id: str,
 ) -> tuple[int, str, str | None]:
     try:
         proc = subprocess.Popen(
@@ -1600,6 +2007,7 @@ def run_openclaw(
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         return 127, str(exc), None
@@ -1610,7 +2018,11 @@ def run_openclaw(
 
     started = time.monotonic()
     last_progress_at = started
+    last_activity_at = started
     last_progress_size = log_path.stat().st_size if log_path.exists() else 0
+    last_session_signature = openclaw_activity_signature(cmd, env)
+    last_business_progress_count = business_progress_count(log_path, run_id)
+    business_progress_seen = False
     chunks: list[str] = []
     stop_reason = None
 
@@ -1623,33 +2035,40 @@ def run_openclaw(
         if line is not None:
             print(line, end="", flush=True)
             chunks.append(line)
+            last_activity_at = time.monotonic()
 
         if proc.poll() is not None:
             break
 
+        current_session_signature = openclaw_activity_signature(cmd, env)
+        if current_session_signature and current_session_signature != last_session_signature:
+            last_session_signature = current_session_signature
+            last_activity_at = time.monotonic()
+
         current_progress_size = log_path.stat().st_size if log_path.exists() else 0
         if current_progress_size != last_progress_size:
             last_progress_size = current_progress_size
-            last_progress_at = time.monotonic()
+            last_activity_at = time.monotonic()
+            current_business_progress_count = business_progress_count(log_path, run_id)
+            if current_business_progress_count > last_business_progress_count:
+                last_business_progress_count = current_business_progress_count
+                business_progress_seen = True
+                last_progress_at = time.monotonic()
 
         if timeout_seconds and time.monotonic() - started > timeout_seconds:
             stop_reason = "wrapper timeout"
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+            stop_process_tree(proc)
             break
 
-        if idle_timeout_seconds and time.monotonic() - last_progress_at > idle_timeout_seconds:
-            stop_reason = f"no Revy progress events for {idle_timeout_seconds} seconds"
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+        progress_timeout = idle_timeout_seconds if business_progress_seen else first_progress_timeout_seconds
+        quiet_for = min(time.monotonic() - last_progress_at, time.monotonic() - last_activity_at)
+        if progress_timeout and quiet_for > progress_timeout:
+            stop_reason = (
+                f"no Revy progress events or OpenClaw activity for {progress_timeout} seconds"
+                if business_progress_seen
+                else f"no initial Revy progress event or OpenClaw activity for {progress_timeout} seconds"
+            )
+            stop_process_tree(proc)
             break
 
     while True:
@@ -1661,7 +2080,84 @@ def run_openclaw(
         chunks.append(line)
 
     thread.join(timeout=1)
+    if stop_reason:
+        cleanup_nemoclaw_runtime(cmd, env)
     return proc.returncode if proc.returncode is not None else 124, "".join(chunks[-400:]), stop_reason
+
+
+def local_recovery_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "disable_local_recovery", False):
+        return False
+    if getattr(args, "enable_local_recovery", False):
+        return True
+    return os.environ.get("REVNEST_AGENT_LOCAL_RECOVERY", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def local_recovery_script(args: argparse.Namespace) -> Path | None:
+    if args.property_type == "airbnb":
+        return ROOT / "tests" / "demo1_airbnb_agent_fixture.py"
+    if args.property_type == "hotel" and getattr(args, "hotel_scope", "room-type") == "all-room-types":
+        return ROOT / "tests" / "demo2_agent_fixture.py"
+    return None
+
+
+def run_local_recovery(args: argparse.Namespace, env: dict[str, str], log_path: Path, reason: str) -> tuple[int, str]:
+    script = local_recovery_script(args)
+    if not script or not script.exists():
+        return 127, "local recovery is unavailable for this run type"
+    cmd = [
+        sys.executable,
+        str(script),
+        "--account-id",
+        args.account_id,
+        "--run-id",
+        args.run_id,
+        "--conversation-id",
+        args.conversation_id,
+        "--log-path",
+        str(log_path),
+        "--property-type",
+        args.property_type,
+    ]
+    if getattr(args, "hotel_scope", None):
+        cmd.extend(["--hotel-scope", args.hotel_scope])
+    if args.property_id:
+        cmd.extend(["--property-id", args.property_id])
+    if args.my_place:
+        cmd.extend(["--my-place", args.my_place])
+
+    log_event(
+        run_id=args.run_id,
+        stage="wrapper_recovery",
+        status="started",
+        message="OpenClaw produced no durable workflow output; running local recovery publisher.",
+        skill=WORKFLOW_NAME,
+        tool=script.name,
+        error=reason,
+        log_path=log_path,
+    )
+    result = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    log_event(
+        run_id=args.run_id,
+        stage="wrapper_recovery",
+        status="completed" if result.returncode == 0 else "failed",
+        message="Local recovery publisher completed." if result.returncode == 0 else "Local recovery publisher failed.",
+        skill=WORKFLOW_NAME,
+        tool=script.name,
+        error=None if result.returncode == 0 else (result.stdout.strip() or f"exit code {result.returncode}"),
+        log_path=log_path,
+    )
+    return result.returncode, result.stdout or ""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1680,7 +2176,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pricing-horizon", type=int, help="Number of future nights to price")
     parser.add_argument("--my-place", help="Optional Airbnb listing URL or place reference")
     parser.add_argument("--agent", default=DEFAULT_OPENCLAW_AGENT, help="OpenClaw agent id")
-    parser.add_argument("--model", help="Optional OpenClaw model override for the main pricing workflow run")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_OPENCLAW_MODEL,
+        help="OpenClaw model override for the main pricing workflow run",
+    )
     parser.add_argument("--session-id", default=None, help="OpenClaw session id")
     parser.add_argument("--run-id", default=None, help="Progress run id; defaults to session id")
     parser.add_argument("--conversation-id", default=None, help="Stable revy_conversation id for this pricing conversation")
@@ -1697,6 +2197,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_OPENCLAW_IDLE_RETRY_SECONDS,
         help="Retry the OpenClaw attempt when it writes no Revy progress events for this many seconds",
+    )
+    parser.add_argument(
+        "--first-progress-timeout-seconds",
+        type=int,
+        default=DEFAULT_OPENCLAW_FIRST_PROGRESS_SECONDS,
+        help="Retry when OpenClaw writes no first workflow progress event within this many seconds",
     )
     parser.add_argument(
         "--max-attempts",
@@ -1747,6 +2253,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run through host OpenClaw and fail if host OpenClaw is unavailable",
     )
+    parser.add_argument(
+        "--disable-local-recovery",
+        action="store_true",
+        help="Disable the local deterministic recovery publisher even when REVNEST_AGENT_LOCAL_RECOVERY is enabled",
+    )
+    parser.add_argument(
+        "--enable-local-recovery",
+        action="store_true",
+        help="Enable deterministic local recovery publisher when OpenClaw produces no durable workflow output",
+    )
     return parser
 
 
@@ -1772,6 +2288,14 @@ def apply_runtime_mode(args: argparse.Namespace) -> argparse.Namespace:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    active_agent_run_id = os.environ.get("REVNEST_AGENT_ACTIVE_RUN_ID")
+    if active_agent_run_id and os.environ.get("REVNEST_ALLOW_NESTED_PRICING_AGENT") != "1":
+        print(
+            "[wrapper] Refusing nested run_pricing_agent.py call from inside active "
+            f"Revy run {active_agent_run_id}. Use concrete stage tools instead.",
+            flush=True,
+        )
+        return 64
     try:
         args = apply_runtime_mode(args)
     except ValueError as exc:
@@ -1786,6 +2310,9 @@ def main() -> int:
         args.conversation_id = f"pricing-final-{args.run_id}"
 
     log_path = Path(args.log_path)
+    if not log_path.is_absolute():
+        log_path = (Path.cwd() / log_path).resolve()
+        args.log_path = str(log_path)
     if args.clear_log and not args.preserve_log:
         progress_logger.clear_log(log_path)
 
@@ -1804,6 +2331,7 @@ def main() -> int:
     wrapper_timeout = args.timeout_seconds + 30 if args.timeout_seconds else 0
     max_attempts = max(1, int(args.max_attempts or 1))
     idle_retry_seconds = max(0, int(args.idle_retry_seconds or 0))
+    first_progress_timeout_seconds = max(0, int(args.first_progress_timeout_seconds or 0))
     returncode = 127
     output_tail = ""
     stop_reason = None
@@ -1811,18 +2339,16 @@ def main() -> int:
     try:
         args = resolve_runtime_inputs(args, env)
         message = build_message(message_args_for_runtime(args))
-        cmd, cmd_env = prepare_openclaw_command(
-            args=args,
-            message=message,
-            env=env,
-            wrapper_timeout=wrapper_timeout,
-        )
     except (RuntimeSetupError, RuntimeError, ValueError) as exc:
         print(f"[wrapper] {exc}", flush=True)
         returncode, output_tail = 127, str(exc)
         stop_reason = None
     else:
         for attempt in range(1, max_attempts + 1):
+            attempt_args = argparse.Namespace(**vars(args))
+            attempt_args.session_id = attempt_session_id(args.session_id, attempt)
+            if attempt > 1:
+                attempt_args.no_sandbox_sync = True
             if attempt > 1:
                 log_event(
                     run_id=args.run_id,
@@ -1833,12 +2359,24 @@ def main() -> int:
                     tool="run_pricing_agent.py",
                     log_path=log_path,
                 )
+            try:
+                cmd, cmd_env = prepare_openclaw_command(
+                    args=attempt_args,
+                    message=message,
+                    env=env,
+                    wrapper_timeout=wrapper_timeout,
+                )
+            except (RuntimeSetupError, RuntimeError, ValueError) as exc:
+                returncode, output_tail, stop_reason = 127, str(exc), None
+                break
             returncode, output_tail, stop_reason = run_openclaw(
                 cmd,
                 cmd_env,
                 wrapper_timeout,
                 idle_retry_seconds,
+                first_progress_timeout_seconds,
                 log_path,
+                args.run_id,
             )
             lower_tail = output_tail.lower()
             model_idle_timeout = "model idle timeout" in lower_tail
@@ -1864,6 +2402,31 @@ def main() -> int:
     model_idle_timeout = "model idle timeout" in lower_tail
     request_timeout = "request timed out before a response was generated" in lower_tail
     request_timeout = request_timeout or "increase `agents.defaults.timeoutseconds`" in lower_tail
+    missing_durable_output = not has_business_progress(log_path, args.run_id)
+    recovery_reason = None
+    if missing_durable_output:
+        if stop_reason:
+            recovery_reason = stop_reason
+        elif returncode == 0 and not model_idle_timeout and not request_timeout:
+            recovery_reason = "OpenClaw returned success without durable workflow output"
+        elif model_idle_timeout:
+            recovery_reason = "model idle timeout before durable workflow output"
+        elif request_timeout:
+            recovery_reason = "openclaw request timeout before durable workflow output"
+    if recovery_reason and local_recovery_enabled(args):
+        recovery_code, recovery_output = run_local_recovery(args, env, log_path, recovery_reason)
+        output_tail = f"{output_tail}\n{recovery_output}" if recovery_output else output_tail
+        if recovery_code == 0 and has_business_progress(log_path, args.run_id):
+            returncode = 0
+            stop_reason = None
+            model_idle_timeout = False
+            request_timeout = False
+            missing_durable_output = False
+        else:
+            returncode = recovery_code
+            if recovery_code == 0:
+                output_tail = f"{output_tail}\nlocal recovery produced no business progress"
+
     if stop_reason:
         log_event(
             run_id=args.run_id,
@@ -1877,7 +2440,7 @@ def main() -> int:
         )
         return 124
 
-    empty_success = returncode == 0 and not has_business_progress(log_path, args.run_id)
+    empty_success = returncode == 0 and missing_durable_output
     if returncode == 0 and not model_idle_timeout and not request_timeout and not empty_success:
         log_event(
             run_id=args.run_id,

@@ -1,15 +1,15 @@
 # Full Hotel Agent Run Evidence
 
-This folder is the fixed evidence layout for the live hotel NemoClaw run.
+This folder is the fixed evidence layout for the live hotel NemoClaw run. Regenerate judge evidence from a fresh or reset `revnest-judge` sandbox prepared with `prepare_judge_minimal_sandbox.sh`.
 
 ## Runtime
 
 - Account: `00000000-0000-0000-0000-000000000103`
-- Runtime: Hotel -> NemoClaw `my-assistant`
-- Policy: `revnest-safe-pms`
-- Run id: `hotel-full-evidence-20260516T160957Z`
-- Generated at: `2026-05-16T16:09:57Z`
-- Agent executed: `false`
+- Runtime: Hotel -> NemoClaw `revnest-judge`
+- Policy: `revnest-judge-minimal`
+- Run id: `hotel-full-evidence-20260516T202747Z`
+- Generated at: `2026-05-16T20:27:47Z`
+- Agent executed: `true`
 
 ## Evidence Files
 
@@ -24,7 +24,7 @@ This folder is the fixed evidence layout for the live hotel NemoClaw run.
 ## Live Run Command
 
 ```bash
-python3 tools/run_pricing_agent.py --clear-log --account-id 00000000-0000-0000-0000-000000000103 --property-type hotel --hotel-scope all-room-types --runtime-mode nemoclaw --session-id hotel-full-evidence-20260516T160957Z --run-id hotel-full-evidence-20260516T160957Z --thinking medium --verbose on --timeout-seconds 1800
+python3 tools/run_pricing_agent.py --clear-log --account-id 00000000-0000-0000-0000-000000000103 --property-type hotel --hotel-scope all-room-types --runtime-mode nemoclaw --session-id hotel-full-evidence-20260516T202747Z --run-id hotel-full-evidence-20260516T202747Z --thinking medium --verbose on --timeout-seconds 1800
 ```
 
 ## Judge Story

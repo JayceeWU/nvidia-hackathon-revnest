@@ -32,19 +32,20 @@ agent-browser --session "<run_id>" get title --json
 agent-browser --session "<run_id>" snapshot --json
 ```
 
-Secondary read: OpenClaw built-in Browser with the managed `openclaw` profile:
+Secondary fallback only if `agent-browser` is unavailable or fails: OpenClaw
+built-in Browser with the managed `openclaw` profile:
 
 ```bash
-openclaw browser --browser-profile openclaw status --json
-openclaw browser --browser-profile openclaw start --json
-openclaw browser --browser-profile openclaw open "<my_place>" --json
-openclaw browser --browser-profile openclaw wait --load networkidle --json
-openclaw browser --browser-profile openclaw snapshot --interactive --json
+openclaw browser --browser-profile openclaw --json status
+openclaw browser --browser-profile openclaw --json start
+openclaw browser --browser-profile openclaw --json open "<my_place>"
+openclaw browser --browser-profile openclaw --json wait --load networkidle
+openclaw browser --browser-profile openclaw --json snapshot --interactive
 ```
 
-Prefer the managed `openclaw` profile. Use the documented `user` / existing
-Chrome session profile only when signed-in browser state is explicitly needed
-and the user can approve any attach prompt.
+Prefer the host `agent-browser` session in this RevNest runtime. Use the
+documented `user` / existing Chrome session profile only when signed-in browser
+state is explicitly needed and the user can approve any attach prompt.
 
 If one browser method is unavailable or fails, repeat the successful method a
 second time after reload/wait and compare the stable fields. A context read is

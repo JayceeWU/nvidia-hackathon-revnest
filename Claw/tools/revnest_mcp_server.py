@@ -400,6 +400,8 @@ def collect_market_data_bundle_impl(
         str(task_timeout_seconds),
         "--log-path",
         str(log_path or DEFAULT_LOG_PATH),
+        "--stdout-mode",
+        "summary",
     ]
     if end_date:
         cmd.extend(["--end-date", end_date])
@@ -440,9 +442,61 @@ def collect_market_data_bundle_impl(
             "status": status,
             "returncode": proc.returncode,
             "duration_seconds": round(duration, 3),
-            "payload": payload,
+            "payload": compact_market_data_payload(payload),
             "error": None if proc.returncode == 0 else compact_error(proc.stderr or proc.stdout),
             "stderr_tail": compact_error(proc.stderr, limit=2000) if proc.stderr else None,
+        }
+    )
+
+
+def compact_market_data_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    results = []
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        result: dict[str, Any] = {
+            "stage": item.get("stage") or item.get("label"),
+            "status": item.get("status"),
+            "tool": item.get("tool"),
+            "summary": item.get("summary"),
+            "error": compact_error(item.get("error")) if item.get("error") else None,
+            "duration_seconds": item.get("duration_seconds"),
+        }
+        source_json = item.get("json")
+        if isinstance(source_json, dict):
+            for key in ("summary", "status", "source", "tool", "demand_signal", "rate_summary", "stats", "totals"):
+                if key in source_json:
+                    result[key] = source_json.get(key)
+            if isinstance(source_json.get("events"), list):
+                result["event_count"] = len(source_json["events"])
+                result["sample_events"] = source_json["events"][:3]
+            if isinstance(source_json.get("hotels"), list):
+                result["hotel_count"] = len(source_json["hotels"])
+                result["sample_hotels"] = source_json["hotels"][:3]
+            if isinstance(source_json.get("daily"), list):
+                result["daily"] = source_json["daily"][:7]
+        results.append(sanitize_payload(result))
+
+    return sanitize_payload(
+        {
+            "status": payload.get("status"),
+            "run_id": payload.get("run_id"),
+            "account_id": payload.get("account_id"),
+            "property_id": payload.get("property_id"),
+            "property_type": payload.get("property_type"),
+            "address": payload.get("address"),
+            "start_date": payload.get("start_date"),
+            "end_date": payload.get("end_date"),
+            "pricing_horizon": payload.get("pricing_horizon"),
+            "currency": payload.get("currency"),
+            "output_path": payload.get("output_path"),
+            "status_counts": payload.get("status_counts"),
+            "summary_write_errors": payload.get("summary_write_errors"),
+            "moodtrip_note": payload.get("moodtrip_note"),
+            "results": results,
         }
     )
 
@@ -1378,7 +1432,10 @@ RETURNING json_build_object(
     output = run_pricing_agent.run_psql_sql(sql, local_env(database_url))
     if not output:
         raise ValueError(f"Property {property_id} was not found for account {account_id}.")
-    row = json.loads(output.splitlines()[-1])
+    json_line = next((line.strip() for line in reversed(output.splitlines()) if line.strip().startswith(("{", "["))), "")
+    if not json_line:
+        raise ValueError(f"Expected JSON property row from PostgreSQL, got: {output[-500:]}")
+    row = json.loads(json_line)
     return {"status": "completed", "property": sanitize_payload(row)}
 
 

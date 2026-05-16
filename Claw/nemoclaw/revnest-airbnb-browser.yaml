@@ -1,5 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 RevNest. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Experimental only. Do not use for NemoClaw judging.
+# The judge-facing NemoClaw path is hotel/MockHotel with
+# revnest-judge-minimal.yaml.
 
 preset:
   name: revnest-airbnb-browser

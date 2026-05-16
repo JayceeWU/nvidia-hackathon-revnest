@@ -9,8 +9,8 @@ unauthorized MockHotel PMS writes.
 
 - Demo: `revnest_nemoclaw_safe_pms_approval_chain`
 - Passed: `true`
-- Sandbox: `my-assistant`
-- Policy: `revnest-safe-pms`
+- Sandbox: `revnest-judge`
+- Policy: `revnest-judge-minimal`
 
 ## Act 1: Revy Creates A Pending Task
 
@@ -45,11 +45,11 @@ human approval.
 ## Act 2: NemoClaw/OpenShell Denies Direct PMS Write
 
 A direct sandbox POST to MockHotel `/api/prices` is denied by the active
-`revnest-safe-pms` policy. This is the core NemoClaw-specific guardrail: the
+`revnest-judge-minimal` policy. This is the core NemoClaw-specific guardrail: the
 agent cannot bypass the approval workflow.
 
 - Shields: `Shields: UP (lockdown active)`
-- Policy state: `revnest-safe-pms active`
+- Policy state: `revnest-judge-minimal active`
 - Evidence log: `logs/15_direct_pms_write_denied_concise.log`
 
 ```text

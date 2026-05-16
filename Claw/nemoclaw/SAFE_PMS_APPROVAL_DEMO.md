@@ -47,34 +47,23 @@ why approval is needed, and WebApp decides whether to sync MockHotel.
 
 ## NemoClaw Policy
 
-The demo policy preset is:
+The judge-facing policy preset is:
 
 ```text
-/home/asus/revnest/Claw/nemoclaw/revnest-safe-pms.yaml
+/home/asus/revnest/Claw/nemoclaw/revnest-judge-minimal.yaml
 ```
 
-It is also installed in the local NemoClaw blueprint presets directory as
-`revnest-safe-pms`.
-
-Preview the policy without changing the current sandbox:
+For judging, use a fresh or reset sandbox and apply only the minimal RevNest
+policy:
 
 ```bash
-nemoclaw my-assistant policy-add revnest-safe-pms --dry-run
+/home/asus/revnest/Claw/nemoclaw/prepare_judge_minimal_sandbox.sh revnest-judge
 ```
 
-For judging, use a fresh hardened sandbox or snapshot, then apply:
-
-```bash
-/home/asus/revnest/Claw/nemoclaw/enable_revnest_safe_pms.sh my-assistant
-```
-
-Lock the sandbox before judging so the policy cannot be casually edited from
-inside the agent runtime:
-
-```bash
-nemoclaw my-assistant shields up
-nemoclaw my-assistant shields status
-```
+The setup script removes known non-judge presets, applies
+`revnest-judge-minimal`, turns shields up, captures policy evidence, and fails
+if active Airbnb, npm, PyPI, Homebrew, Discord, Hugging Face, Slack, or Telegram
+policies remain.
 
 The expected status is:
 
@@ -83,12 +72,9 @@ Shields: UP (lockdown active)
 Policy:  restrictive
 ```
 
-If the preset has not been installed into NemoClaw on another machine, apply the
-project copy instead:
-
-```bash
-nemoclaw my-assistant policy-add --from-file /home/asus/revnest/Claw/nemoclaw/revnest-safe-pms.yaml --yes
-```
+The older `revnest-safe-pms.yaml` remains as the narrow MockHotel read-only
+building block, but the judge preset is preferred because it also makes the
+allowed inference routes explicit and keeps the active policy list clean.
 
 ## Demo Flow
 
@@ -128,9 +114,9 @@ This creates a three-act transcript and matching JSON evidence:
 Use the transcript first, then open the raw logs below if judges ask for the
 underlying policy evidence.
 
-- `nemoclaw my-assistant logs --follow`
-- `openshell policy get --full my-assistant`
-- `nemoclaw my-assistant shields status`
+- `nemoclaw revnest-judge logs --follow`
+- `openshell policy get --full revnest-judge`
+- `nemoclaw revnest-judge shields status`
 - Policy denial for direct PMS write attempts
 - WebApp pending task before Accept
 - MockHotel live price unchanged before Accept
@@ -147,9 +133,9 @@ The key files to show judges are:
 
 - `demo_transcript.md`
 - `samples/safe_pms_evidence_chain.json`
-- `08_shields_status_after_lockdown.log`
-- `10_policy_list_after_lockdown.log`
-- `11_openshell_policy_full_after_lockdown.yaml`
+- `20_judge_minimal_policy_list.log`
+- `21_judge_minimal_openshell_policy_full.yaml`
+- `22_judge_minimal_shields_status.log`
 - `15_direct_pms_write_denied_concise.log`
 
 ## Classification Demo

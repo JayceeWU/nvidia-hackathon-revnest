@@ -116,8 +116,8 @@ def build_pending_task_act() -> dict[str, Any]:
 
 
 def build_denial_act() -> dict[str, Any]:
-    shields_text = read_text(LOGS_DIR / "08_shields_status_after_lockdown.log")
-    policy_text = read_text(LOGS_DIR / "10_policy_list_after_lockdown.log")
+    shields_text = read_text(LOGS_DIR / "22_judge_minimal_shields_status.log")
+    policy_text = read_text(LOGS_DIR / "20_judge_minimal_policy_list.log")
     log_name, denial_line = first_existing_log_line(
         [
             LOGS_DIR / "15_direct_pms_write_denied_concise.log",
@@ -128,7 +128,7 @@ def build_denial_act() -> dict[str, Any]:
     )
     passed = (
         "Shields: UP" in shields_text
-        and "revnest-safe-pms" in policy_text
+        and "revnest-judge-minimal" in policy_text
         and denial_line is not None
         and "HTTP:POST" in denial_line
     )
@@ -137,7 +137,7 @@ def build_denial_act() -> dict[str, Any]:
         "passed": passed,
         "description": "NemoClaw/OpenShell policy blocks a direct POST to MockHotel PMS.",
         "shields_status": "Shields: UP (lockdown active)" if "Shields: UP" in shields_text else "missing",
-        "policy": "revnest-safe-pms active" if "revnest-safe-pms" in policy_text else "missing",
+        "policy": "revnest-judge-minimal active" if "revnest-judge-minimal" in policy_text else "missing",
         "log_file": log_name,
         "denial_line": denial_line,
     }
@@ -220,8 +220,8 @@ def build_evidence() -> dict[str, Any]:
         "demo": "revnest_nemoclaw_safe_pms_approval_chain",
         "passed": all(act.get("passed") for act in acts),
         "generated_at": "2026-05-16T16:00:00.000Z",
-        "sandbox": "my-assistant",
-        "policy": "revnest-safe-pms",
+        "sandbox": "revnest-judge",
+        "policy": "revnest-judge-minimal",
         "summary": (
             "Revy stages PMS work as a pending task, OpenShell denies direct PMS writes, "
             "and WebApp Accept is the only path that changes MockHotel."
@@ -281,8 +281,9 @@ human approval.
 ## Act 2: NemoClaw/OpenShell Denies Direct PMS Write
 
 A direct sandbox POST to MockHotel `/api/prices` is denied by the active
-`revnest-safe-pms` policy. This is the core NemoClaw-specific guardrail: the
-agent cannot bypass the approval workflow.
+`revnest-judge-minimal` policy. This is the core NemoClaw-specific guardrail:
+the agent can inspect PMS prices and use inference, but cannot bypass the
+approval workflow.
 
 - Shields: `{denial.get("shields_status")}`
 - Policy state: `{denial.get("policy")}`

@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from sentence_transformers import SentenceTransformer
+
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception:  # noqa: BLE001 - allow lightweight lexical fallback in sandboxes.
+    SentenceTransformer = None  # type: ignore[assignment]
 
 
 DEFAULT_DB_URL = "postgresql://postgres:postgres@127.0.0.1:55434/dev"
@@ -47,6 +51,8 @@ def connect() -> psycopg.Connection:
 
 @lru_cache(maxsize=1)
 def embedding_model() -> SentenceTransformer:
+    if SentenceTransformer is None:
+        raise RuntimeError("sentence_transformers is unavailable")
     cache_dir = os.environ.get(
         "STRATEGY_MEMORY_MODEL_CACHE",
         DEFAULT_MODEL_CACHE,
@@ -177,11 +183,61 @@ def is_strategy_domain_query(query: str, expanded_query: str) -> bool:
     return any(term in text for term in domain_terms)
 
 
+def lexical_score(content: str, section: str | None, source: str | None, terms: list[str]) -> float:
+    haystack = f"{source or ''} {section or ''} {content}".lower()
+    if not terms:
+        return 0
+    hits = sum(1 for term in terms if term in haystack)
+    phrase_bonus = 1 if any(phrase in haystack for phrase in ("pricing strategy", "revenue management", "airbnb", "dream inn")) else 0
+    return min(1.0, (hits + phrase_bonus) / max(4, min(len(terms), 12)))
+
+
+def lexical_search_strategy_memory(query: str, expanded_query: str, top_k: int) -> dict[str, Any]:
+    terms = []
+    for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{2,}", expanded_query.lower()):
+        if term not in terms:
+            terms.append(term)
+    limit = max(1, min(int(top_k or 8), 20))
+    chunks: list[dict[str, Any]] = []
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT source, source_path, section, content, metadata
+                FROM strategy_memory_chunks
+                """
+            )
+            for source, source_path, section, content, metadata in cur.fetchall():
+                score_value = lexical_score(content or "", section, source, terms)
+                if score_value <= 0:
+                    continue
+                chunks.append(
+                    {
+                        "source": source,
+                        "source_path": source_path,
+                        "section": section,
+                        "score": round(score_value, 4),
+                        "content": content,
+                        "metadata": metadata if isinstance(metadata, dict) else json.loads(metadata),
+                    }
+                )
+    chunks.sort(key=lambda item: item["score"], reverse=True)
+    return {
+        "query": query,
+        "expanded_query": expanded_query,
+        "retrieval_mode": "lexical",
+        "chunks": chunks[:limit],
+    }
+
+
 def search_strategy_memory(query: str, top_k: int = 8) -> dict[str, Any]:
     expanded_query = expand_query(query)
     if not is_strategy_domain_query(query, expanded_query):
         return {"query": query, "expanded_query": expanded_query, "chunks": []}
-    query_vector = vector_literal(embed_texts([expanded_query])[0])
+    try:
+        query_vector = vector_literal(embed_texts([expanded_query])[0])
+    except Exception:
+        return lexical_search_strategy_memory(query, expanded_query, top_k)
     limit = max(1, min(int(top_k or 8), 20))
 
     sql = """

@@ -3,115 +3,120 @@
     "hotelHomeDashboard": {
       "demandSignals": {
         "competitor": {
-          "collectedAt": "2026-05-15T19:16:40.000Z",
-          "delta_pct": 3,
+          "collectedAt": "2026-05-16T20:29:50.255106Z",
+          "delta_pct": 5,
           "location": "Santa Cruz, CA",
-          "median_rate": 238,
-          "sample_size": 5,
+          "median_rate": 244,
+          "sample_size": 6,
           "trend": "up"
         },
         "events": {
-          "collectedAt": "2026-05-15T19:16:20.000Z",
-          "footnote": "Pushes price up",
+          "collectedAt": "2026-05-16T20:29:50.255106Z",
+          "footnote": "Demo2 e2e fixture detected event pressure",
           "headline": "Increasing Demand",
           "location": "Santa Cruz",
           "next": [],
           "trend": "up",
-          "upcoming_count": 4
+          "upcoming_count": 3
         },
         "occupancy": {
-          "available_room_nights": 104,
-          "booked_room_nights": 84,
-          "collectedAt": "2026-05-15T19:17:00.000Z",
-          "delta_vs_last_month_pct": 4,
-          "portfolio_rate": 0.81,
+          "available_room_nights": 51,
+          "booked_room_nights": 42,
+          "collectedAt": "2026-05-16T20:29:50.255106Z",
+          "delta_vs_last_month_pct": 6,
+          "portfolio_rate": 0.82,
           "trend": "up"
         },
         "weather": {
-          "collectedAt": "2026-05-15T19:16:00.000Z",
+          "collectedAt": "2026-05-16T20:29:50.255106Z",
           "days": [
             {
-              "conditions": "partly cloudy",
-              "day": "Fri",
-              "high": 67
+              "conditions": "sunny",
+              "day": "D1",
+              "high": 72
             },
             {
               "conditions": "sunny",
-              "day": "Sat",
-              "high": 69
+              "day": "D2",
+              "high": 70
             },
             {
-              "conditions": "partly cloudy",
-              "day": "Sun",
-              "high": 68
+              "conditions": "clear",
+              "day": "D3",
+              "high": 69
             }
           ],
-          "footnote": "No major impact",
-          "high_f": 68,
-          "impactTrend": "flat",
+          "footnote": "Demo2 e2e fixture updated weather signal",
+          "high_f": 72,
           "location": "Santa Cruz, CA",
-          "low_f": 55,
-          "precip_pct": 12,
-          "summary": "Partly cloudy, mild",
-          "trend": "neutral"
+          "low_f": 56,
+          "precip_pct": 4,
+          "summary": "Sunny test demand window",
+          "trend": "up"
         }
       },
       "marketDataRun": {
-        "collectedAt": "2026-05-15T19:17:00.000Z",
-        "endDate": "2026-05-18",
+        "collectedAt": "2026-05-16T20:29:50.255106Z",
+        "endDate": "2026-05-22",
         "pricingHorizon": 3,
         "propertyId": "hotel-home",
         "propertyType": "hotel",
-        "runId": "seed-market-signals",
-        "startDate": "2026-05-16",
-        "updatedAt": "2026-05-15T19:17:00.000Z"
+        "runId": "hotel-full-evidence-20260516T202747Z",
+        "source": "demo2-e2e-fixture",
+        "startDate": "2026-05-20",
+        "updatedAt": "2026-05-16T20:29:50.255106Z"
       }
     },
     "pendingTasks": [
       {
+        "accountId": "00000000-0000-0000-0000-000000000103",
         "action": "Price adjustment required",
-        "agentSuggestedAt": "May 9, 2026 1:18 PM",
-        "agentSuggestedPrice": "$735",
+        "agentSuggestedAt": "2026-05-16 20:29 UTC",
+        "agentSuggestedPrice": "$460",
         "approvalGateLabel": "Approval required",
         "approvalRequirement": "required",
-        "change": "+10%",
-        "changeType": "Increase",
+        "change": "-36%",
+        "changeType": "Decrease",
         "classification": "price_adjustment_required",
         "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
         "classificationLabel": "Price adjustment required",
         "confidenceLow": false,
         "currency": "USD",
-        "currentPrice": "$670",
-        "deviationAbs": 65,
-        "deviationPct": 0.097,
+        "currentPrice": "$723",
+        "deviationAbs": 263,
+        "deviationPct": 0.36376210235131395,
         "guardrailIssue": false,
-        "id": "task-dream-inn-004",
+        "id": "task-hotel-review-dream-inn-beachfront-suite-2026-05-20",
         "materialDifference": true,
-        "mockHotelCurrentPrice": 670,
+        "mockHotelCurrentPrice": 723,
         "outsideStrategyRange": true,
-        "priceDate": "2026-05-17",
-        "priceDirection": "Increase",
-        "property": "Premium Ocean View Two Queen",
-        "propertyId": "dream-inn-premium-ocean-view-two-queen",
-        "property_id": "dream-inn-premium-ocean-view-two-queen",
-        "reason": "Premium two-queen inventory is scarce, and ocean-view demand supports a guarded lift inside the saved ceiling.",
+        "priceDate": "2026-05-20",
+        "priceDirection": "Decrease",
+        "property": "Beachfront Suite",
+        "propertyId": "dream-inn-beachfront-suite",
+        "property_id": "dream-inn-beachfront-suite",
+        "reason": "Demo2 fixture detected a PMS price below the room-type minimum strategy band.",
         "reviewDrivers": [
-          "current MockHotel price is below Revy's strategy range",
-          "final recommendation differs by $65 and +10%"
+          "current MockHotel price is above Revy's strategy range",
+          "final recommendation differs by $263 and +36%"
         ],
-        "reviewReason": "current MockHotel price is below Revy's strategy range; final recommendation differs by $65 and +10%",
-        "revySuggestedPrice": 735,
-        "runId": "seed-hotel-safe-pms-demo",
+        "reviewReason": "current MockHotel price is above Revy's strategy range; final recommendation differs by $263 and +36%",
+        "revySuggestedPrice": 460,
+        "runId": "hotel-full-evidence-20260516T202747Z",
         "source": "mockhotel_price_review",
         "status": "Needs approval",
         "strategyRange": {
-          "currentPosition": "below_range",
-          "high": 780,
-          "low": 700
+          "currentPosition": "above_range",
+          "high": 530,
+          "low": 420
         },
         "taskType": "price_adjustment_required",
         "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
         "taskTypeLabel": "Price adjustment required",
+        "threshold": {
+          "absoluteUsd": 25,
+          "percent": 0.15
+        },
         "type": "Price adjustment required"
       },
       {
@@ -346,6 +351,66 @@
       }
     ],
     "priceLogs": [
+      {
+        "acceptedAt": "2026-05-16T17:46:44.448Z",
+        "acceptedBy": {
+          "accountType": "hotel",
+          "email": "hotel@revnest.ai",
+          "id": "00000000-0000-0000-0000-000000000103",
+          "name": "Hotel Operator",
+          "role": "host"
+        },
+        "adjustedAt": "2026-05-16T17:46:44.448Z",
+        "agentSignals": [
+          "Demand change detected",
+          "Host guardrails checked",
+          "Final price confirmed by user"
+        ],
+        "agentSuggestedAt": "May 9, 2026 1:18 PM",
+        "agentSuggestedPrice": "$735",
+        "approvalGateLabel": "Approval required",
+        "approvalRequirement": "required",
+        "approvalSource": "webapp_accept_button",
+        "change": "+10%",
+        "classification": "price_adjustment_required",
+        "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "classificationLabel": "Price adjustment required",
+        "id": "log-1778953604448",
+        "mockHotelSync": {
+          "ok": true,
+          "updatedRoomTypePrices": 1,
+          "updates": [
+            {
+              "priceCents": 73500,
+              "priceDate": "2026-05-17",
+              "property": "Premium Ocean View Two Queen",
+              "propertyId": "dream-inn-premium-ocean-view-two-queen",
+              "roomType": "Premium Ocean View Two Queen"
+            }
+          ]
+        },
+        "newPrice": "$735",
+        "oldPrice": "$670",
+        "pendingTaskType": "price_adjustment_required",
+        "pendingTaskTypeLabel": "Price adjustment required",
+        "priceDate": "2026-05-17",
+        "priceDirection": "Increase",
+        "property": "Premium Ocean View Two Queen",
+        "propertyId": "dream-inn-premium-ocean-view-two-queen",
+        "reason": "Premium two-queen inventory is scarce, and ocean-view demand supports a guarded lift inside the saved ceiling.",
+        "reviewDrivers": [
+          "current MockHotel price is below Revy's strategy range",
+          "final recommendation differs by $65 and +10%"
+        ],
+        "reviewReason": "current MockHotel price is below Revy's strategy range; final recommendation differs by $65 and +10%",
+        "strategyRange": {
+          "currentPosition": "below_range",
+          "high": 780,
+          "low": 700
+        },
+        "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "type": "Increase"
+      },
       {
         "adjustedAt": "May 9, 2026 12:48 PM",
         "agentSignals": [
@@ -708,10 +773,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$923",
         "agentAdr": 923,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Beachfront",
           "Suite",
@@ -742,10 +812,27 @@
             "agent": 1015,
             "day": "May 19",
             "fixed": 923
+          },
+          {
+            "agent": 460,
+            "day": "May 20",
+            "fixed": 723
+          },
+          {
+            "agent": 829,
+            "day": "May 21",
+            "fixed": 829
+          },
+          {
+            "agent": 1407,
+            "day": "May 22",
+            "fixed": 1407
           }
         ],
         "guests": "1-4 guests",
         "id": "dream-inn-beachfront-suite",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 1900,
         "maxPriceCents": 190000,
@@ -770,10 +857,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$569",
         "agentAdr": 569,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Beachfront",
           "Ocean view",
@@ -789,9 +881,27 @@
         "city": "Santa Cruz",
         "county": "Santa Cruz County",
         "fixedPrice": 569,
-        "forecast": [],
+        "forecast": [
+          {
+            "agent": 443,
+            "day": "May 20",
+            "fixed": 443
+          },
+          {
+            "agent": 509,
+            "day": "May 21",
+            "fixed": 509
+          },
+          {
+            "agent": 878,
+            "day": "May 22",
+            "fixed": 878
+          }
+        ],
         "guests": "1-4 guests",
         "id": "dream-inn-beachfront-two-queen",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 1150,
         "maxPriceCents": 115000,
@@ -816,10 +926,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$419",
         "agentAdr": 419,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Ocean view",
           "Beach access",
@@ -835,9 +950,27 @@
         "city": "Santa Cruz",
         "county": "Santa Cruz County",
         "fixedPrice": 419,
-        "forecast": [],
+        "forecast": [
+          {
+            "agent": 333,
+            "day": "May 20",
+            "fixed": 333
+          },
+          {
+            "agent": 373,
+            "day": "May 21",
+            "fixed": 373
+          },
+          {
+            "agent": 644,
+            "day": "May 22",
+            "fixed": 644
+          }
+        ],
         "guests": "1-2 guests",
         "id": "dream-inn-ocean-view-king",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 900,
         "maxPriceCents": 90000,
@@ -862,10 +995,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$460",
         "agentAdr": 460,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Ocean view",
           "Beach access",
@@ -896,10 +1034,27 @@
             "agent": 498,
             "day": "May 19",
             "fixed": 460
+          },
+          {
+            "agent": 356,
+            "day": "May 20",
+            "fixed": 356
+          },
+          {
+            "agent": 405,
+            "day": "May 21",
+            "fixed": 405
+          },
+          {
+            "agent": 707,
+            "day": "May 22",
+            "fixed": 707
           }
         ],
         "guests": "1-4 guests",
         "id": "dream-inn-ocean-view-two-queen",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 950,
         "maxPriceCents": 95000,
@@ -924,10 +1079,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$631",
         "agentAdr": 631,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Premium view",
           "Ocean view",
@@ -943,9 +1103,27 @@
         "city": "Santa Cruz",
         "county": "Santa Cruz County",
         "fixedPrice": 631,
-        "forecast": [],
+        "forecast": [
+          {
+            "agent": 491,
+            "day": "May 20",
+            "fixed": 491
+          },
+          {
+            "agent": 553,
+            "day": "May 21",
+            "fixed": 553
+          },
+          {
+            "agent": 973,
+            "day": "May 22",
+            "fixed": 973
+          }
+        ],
         "guests": "1-2 guests",
         "id": "dream-inn-premium-ocean-view-king",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 1250,
         "maxPriceCents": 125000,
@@ -970,10 +1148,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$670",
         "agentAdr": 670,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Premium view",
           "Ocean view",
@@ -994,10 +1177,27 @@
             "agent": 735,
             "day": "May 17",
             "fixed": 670
+          },
+          {
+            "agent": 529,
+            "day": "May 20",
+            "fixed": 529
+          },
+          {
+            "agent": 609,
+            "day": "May 21",
+            "fixed": 609
+          },
+          {
+            "agent": 1036,
+            "day": "May 22",
+            "fixed": 1036
           }
         ],
         "guests": "1-4 guests",
         "id": "dream-inn-premium-ocean-view-two-queen",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 1300,
         "maxPriceCents": 130000,
@@ -1022,10 +1222,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$323",
         "agentAdr": 323,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Oceanfront",
           "Beach access",
@@ -1056,10 +1261,27 @@
             "agent": 305,
             "day": "May 19",
             "fixed": 323
+          },
+          {
+            "agent": 256,
+            "day": "May 20",
+            "fixed": 256
+          },
+          {
+            "agent": 288,
+            "day": "May 21",
+            "fixed": 288
+          },
+          {
+            "agent": 487,
+            "day": "May 22",
+            "fixed": 487
           }
         ],
         "guests": "1-2 guests",
         "id": "dream-inn-standard-king",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 700,
         "maxPriceCents": 70000,
@@ -1084,10 +1306,15 @@
         "zipCode": "95060"
       },
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-hotel-all-room-types-1778961451186",
+        "activeRevyConversationId": "revy-hotel-all-room-types-1778961451186",
         "adr": "$350",
         "agentAdr": 350,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T19:53:10.476855Z",
+        "agentRunHotelScope": "all-room-types",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStartedAt": "2026-05-16T19:57:31.238Z",
+        "agentRunStatus": "running",
         "amenities": [
           "Oceanfront",
           "Beach access",
@@ -1108,10 +1335,27 @@
             "agent": 335,
             "day": "May 19",
             "fixed": 350
+          },
+          {
+            "agent": 273,
+            "day": "May 20",
+            "fixed": 273
+          },
+          {
+            "agent": 305,
+            "day": "May 21",
+            "fixed": 305
+          },
+          {
+            "agent": 535,
+            "day": "May 22",
+            "fixed": 535
           }
         ],
         "guests": "1-4 guests",
         "id": "dream-inn-standard-two-queen",
+        "lastAgentRunId": "pricing-workflow-hotel-all-room-types-1778961083946",
+        "lastRevyConversationId": "revy-hotel-all-room-types-1778961083946",
         "location": "Santa Cruz, CA",
         "maxPrice": 750,
         "maxPriceCents": 75000,

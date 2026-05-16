@@ -68,7 +68,7 @@
       "description": "NemoClaw/OpenShell policy blocks a direct POST to MockHotel PMS.",
       "log_file": "15_direct_pms_write_denied_concise.log",
       "passed": true,
-      "policy": "revnest-safe-pms active",
+      "policy": "revnest-judge-minimal active",
       "shields_status": "Shields: UP (lockdown active)"
     },
     {
@@ -126,7 +126,7 @@
   "demo": "revnest_nemoclaw_safe_pms_approval_chain",
   "generated_at": "2026-05-16T16:00:00.000Z",
   "passed": true,
-  "policy": "revnest-safe-pms",
-  "sandbox": "my-assistant",
+  "policy": "revnest-judge-minimal",
+  "sandbox": "revnest-judge",
   "summary": "Revy stages PMS work as a pending task, OpenShell denies direct PMS writes, and WebApp Accept is the only path that changes MockHotel."
 }

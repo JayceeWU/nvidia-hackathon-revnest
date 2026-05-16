@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Experimental only. Do not use for NemoClaw judging.
+# Airbnb runs through host OpenClaw in the judge demo; use
+# prepare_judge_minimal_sandbox.sh for the NemoClaw safety evidence.
+
 SANDBOX_NAME="${1:-my-assistant}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 POLICY_FILE="${SCRIPT_DIR}/revnest-airbnb-browser.yaml"

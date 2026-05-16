@@ -1,1 +1,11 @@
+# RevNest MCP tool server.
 mcp>=1.9.0
+
+# Strategy-memory embedding runtime. Pin CPU PyTorch first so a one-shot
+# Claw install does not pull the default GPU/CUDA torch dependency set.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.12.0+cpu; platform_system == "Linux"
+sentence-transformers==5.1.2
+
+# Strategy-memory MCP server and ingestion/vector-store stack.
+-r skills/strategy-memory/scripts/requirements.txt

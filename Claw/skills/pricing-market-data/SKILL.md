@@ -18,7 +18,7 @@ Run local signal collection through the helper whenever a location and date
 range are known:
 
 ```bash
-python3 tools/run_parallel_market_data.py   --run-id "<run_id>"   --account-id "<account_id>"   --property-id "<property_id>"   --property-type "<airbnb|hotel>"   --address "<verified location or hotel market>"   --start-date "<YYYY-MM-DD>"   --pricing-horizon "<pricing_horizon>"   --capacity "<guest capacity>"   --bedrooms "<bedroom count>"   --bathrooms "<bathroom count>"
+python3 tools/run_parallel_market_data.py   --run-id "<run_id>"   --account-id "<account_id>"   --property-id "<property_id>"   --property-type "<airbnb|hotel>"   --address "<verified location or hotel market>"   --start-date "<YYYY-MM-DD>"   --pricing-horizon "<pricing_horizon>"   --capacity "<guest capacity>"   --bedrooms "<bedroom count>"   --bathrooms "<bathroom count>"   --stdout-mode summary
 ```
 
 This helper owns local Python/API stages for `pricing-weather`,
@@ -31,7 +31,9 @@ page market-signal payload to PostgreSQL `hotel_home_dashboard` with
 `id='home'`, including `demandSignals.weather`, `demandSignals.events`,
 `demandSignals.competitor`, and `demandSignals.occupancy` when those facts are
 available. It also writes `runs/<run_id>-market-data.json` as the combined file
-backup.
+backup. Keep `--stdout-mode summary` for agent runs so the model receives a
+compact handoff instead of the full source payload. Use `--stdout-mode full`
+only for manual debugging.
 
 MoodTrip is MCP-hosted and is not launched by the helper. Invoke
 `pricing-competitors` for MoodTrip hotel comps as a parallel MCP task when the

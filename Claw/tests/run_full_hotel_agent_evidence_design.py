@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "nemoclaw" / "evidence" / "full_hotel_agent_run"
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
 HOTEL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000103"
+DEFAULT_JUDGE_SANDBOX = "revnest-judge"
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -114,7 +115,7 @@ def fetch_webapp_snapshot(account_id: str, webapp_url: str) -> dict:
         return {"ok": False, "url": url, "error": str(exc)}
 
 
-def run_agent_command(run_id: str, timeout_seconds: int) -> list[str]:
+def run_agent_command(run_id: str, timeout_seconds: int, sandbox: str) -> list[str]:
     return [
         "python3",
         "tools/run_pricing_agent.py",
@@ -127,6 +128,8 @@ def run_agent_command(run_id: str, timeout_seconds: int) -> list[str]:
         "all-room-types",
         "--runtime-mode",
         "nemoclaw",
+        "--nemoclaw-sandbox",
+        sandbox,
         "--session-id",
         run_id,
         "--run-id",
@@ -149,8 +152,8 @@ This folder is the fixed evidence layout for the live hotel NemoClaw run.
 ## Runtime
 
 - Account: `{payload["account_id"]}`
-- Runtime: Hotel -> NemoClaw `my-assistant`
-- Policy: `revnest-safe-pms`
+- Runtime: Hotel -> NemoClaw `{payload["sandbox"]}`
+- Policy: `{payload["policy"]}`
 - Run id: `{payload["run_id"]}`
 - Generated at: `{payload["generated_at"]}`
 - Agent executed: `{str(payload["agent_executed"]).lower()}`
@@ -193,7 +196,8 @@ def main() -> int:
 
     generated_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     run_id = f"hotel-full-evidence-{generated_at.replace(':', '').replace('-', '').replace('Z', 'Z')}"
-    command = run_agent_command(run_id, args.timeout_seconds)
+    sandbox = os.environ.get("REVNEST_NEMOCLAW_SANDBOX", DEFAULT_JUDGE_SANDBOX)
+    command = run_agent_command(run_id, args.timeout_seconds, sandbox)
     db_before = db_snapshot(args.database_url, HOTEL_ACCOUNT_ID)
     webapp_before = fetch_webapp_snapshot(HOTEL_ACCOUNT_ID, args.webapp_url)
 
@@ -210,8 +214,8 @@ def main() -> int:
         "generated_at": generated_at,
         "run_id": run_id,
         "runtime": "hotel-nemoclaw",
-        "sandbox": "my-assistant",
-        "policy": "revnest-safe-pms",
+        "sandbox": sandbox,
+        "policy": "revnest-judge-minimal",
     }
     if not args.no_write:
         EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
