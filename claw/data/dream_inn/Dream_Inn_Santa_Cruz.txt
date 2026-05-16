@@ -1,6 +1,0 @@
-hotel_link: https://www.dreaminnsantacruz.com/
-address: 175 W Cliff Dr
-city: Santa Cruz
-state: CA
-zip_code: 95060
-country: United States

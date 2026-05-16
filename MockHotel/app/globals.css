@@ -1,0 +1,454 @@
+:root {
+  --background: #f5f7fb;
+  --foreground: #162022;
+  --muted: #637175;
+  --line: #d8dee4;
+  --panel: #ffffff;
+  --panel-soft: #eef6f4;
+  --accent: #0f766e;
+  --accent-dark: #115e59;
+  --chart: #2563eb;
+  --warning: #d97706;
+  --danger: #b42318;
+  --shadow: 0 12px 32px rgba(20, 33, 43, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.shell {
+  min-height: 100vh;
+  padding: 28px;
+}
+
+.topbar,
+.toolbar,
+.overview,
+.chartPanel,
+.tableWrap,
+.emptyState {
+  width: min(1180px, 100%);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.brand h1,
+.panelHeader h2,
+.roomSummary h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.brand h1 {
+  font-size: 28px;
+}
+
+.brand p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.login {
+  display: grid;
+  gap: 14px;
+  max-width: 380px;
+  margin: 12vh auto 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.login h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.field,
+.selectField {
+  display: grid;
+  gap: 6px;
+}
+
+.field span,
+.selectField span,
+.eyebrow,
+.metric span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.field input,
+.selectField select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 11px 12px;
+  background: white;
+  color: var(--foreground);
+}
+
+.selectField {
+  min-width: 260px;
+}
+
+.selectField select:focus,
+.field input:focus,
+.priceInput:focus {
+  border-color: var(--accent);
+  outline: 3px solid rgba(15, 118, 110, 0.14);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.actions button,
+.secondary {
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.secondary {
+  background: #344054;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.selectors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+}
+
+.monthControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.monthControls strong {
+  min-width: 160px;
+  text-align: center;
+}
+
+.monthControls button {
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 14px;
+  min-width: 140px;
+  text-align: right;
+}
+
+.overview {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.4fr);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.roomSummary,
+.metricStrip,
+.chartPanel,
+.tableWrap,
+.emptyState {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.roomSummary {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.roomSummary h2,
+.panelHeader h2 {
+  font-size: 22px;
+}
+
+.summaryMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summaryMeta span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: var(--panel-soft);
+  color: #23413e;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.metricStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.metric {
+  display: grid;
+  gap: 8px;
+  min-height: 104px;
+  padding: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.metric:last-child {
+  border-right: 0;
+}
+
+.metric strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.chartPanel {
+  margin-bottom: 14px;
+  padding: 18px;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.legendLine {
+  width: 28px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--chart);
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.priceChart {
+  display: block;
+  width: 100%;
+  min-height: 260px;
+  overflow: visible;
+}
+
+.chartGrid {
+  stroke: #dce4ec;
+  stroke-width: 1;
+}
+
+.chartLine {
+  fill: none;
+  stroke: var(--chart);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.chartPoint {
+  fill: white;
+  stroke: var(--chart);
+  stroke-width: 3;
+}
+
+.chartPoint.changed {
+  fill: var(--warning);
+  stroke: white;
+  stroke-width: 2;
+}
+
+.chartTick {
+  fill: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.emptyChart,
+.emptyState {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: var(--muted);
+}
+
+.tableWrap {
+  overflow: hidden;
+}
+
+.priceTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.priceTable th,
+.priceTable td {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 16px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.priceTable th {
+  background: #eef3f8;
+  color: #2d3b3e;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.priceTable tr:last-child td {
+  border-bottom: 0;
+}
+
+.priceInput {
+  width: 112px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 10px;
+  text-align: right;
+}
+
+.priceInput.changed {
+  border-color: var(--warning);
+  background: #fff7ed;
+}
+
+@media (max-width: 820px) {
+  .shell {
+    padding: 18px;
+  }
+
+  .topbar,
+  .toolbar,
+  .panelHeader,
+  .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .selectors,
+  .selectField,
+  .actions button,
+  .secondary {
+    width: 100%;
+  }
+
+  .status {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .overview {
+    grid-template-columns: 1fr;
+  }
+
+  .metricStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric:nth-child(2) {
+    border-right: 0;
+  }
+
+  .metric:nth-child(1),
+  .metric:nth-child(2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .monthControls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .monthControls strong {
+    min-width: 0;
+  }
+
+  .tableWrap {
+    overflow-x: auto;
+  }
+
+  .priceTable {
+    min-width: 520px;
+  }
+}

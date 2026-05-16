@@ -1,0 +1,21 @@
+{
+  "name": "mock-hotel",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3001",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3001",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "next": "^16.2.6",
+    "pg": "^8.16.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.6"
+  }
+}
