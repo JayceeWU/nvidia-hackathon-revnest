@@ -216,6 +216,15 @@ function normalizeRevyStateForDisplay(state) {
   };
 }
 
+function runFailureReason(run) {
+  return run?.error || [...(run?.events || [])].reverse().find((event) => event.error)?.error || "";
+}
+
+function runFailureHeadline(reason) {
+  const detail = reason || "the pricing workflow exited before completing.";
+  return `Revy hit an issue: ${detail} Please try Run Revy again.`;
+}
+
 const emptyPropertyForm = {
   name: "",
   propertyType: "Airbnb",
@@ -685,6 +694,7 @@ export default function Home() {
         const response = await fetch(`/api/agent-runs/${encodeURIComponent(activeRevyRunId)}`);
         const payload = await readJsonResponse(response, "Failed to load Revy run progress.");
         if (cancelled) return;
+        const failureReason = runFailureReason(payload);
         setRevyState((current) => ({
           ...current,
           status: payload.status || current.status,
@@ -692,7 +702,7 @@ export default function Home() {
             payload.status === "completed"
               ? "Revy finished the latest room pricing run."
               : payload.status === "failed"
-                ? "Revy hit an issue while running this room pricing pass."
+                ? runFailureHeadline(failureReason)
                 : current.headline,
           updatedAt: new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }),
           events: payload.events || current.events || [],

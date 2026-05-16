@@ -4,6 +4,7 @@
 **/*.pyc
 **/.pytest_cache/
 **/.ruff_cache/
+**/.venv/
 
 Claw/runs/
 Claw/logs/

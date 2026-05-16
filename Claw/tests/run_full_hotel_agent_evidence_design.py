@@ -187,26 +187,21 @@ def main() -> int:
     parser.add_argument("--database-url", default=os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL)
     parser.add_argument("--webapp-url", default=os.environ.get("REVNEST_WEBAPP_URL", "http://localhost:3000"))
     parser.add_argument("--run-agent", action="store_true", help="Execute the long hotel NemoClaw agent run.")
+    parser.add_argument("--no-write", action="store_true", help="Print the evidence manifest without updating evidence files.")
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     args = parser.parse_args()
 
     generated_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     run_id = f"hotel-full-evidence-{generated_at.replace(':', '').replace('-', '').replace('Z', 'Z')}"
     command = run_agent_command(run_id, args.timeout_seconds)
-
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    write_json(EVIDENCE_DIR / "db_before.json", db_snapshot(args.database_url, HOTEL_ACCOUNT_ID))
-    write_json(EVIDENCE_DIR / "webapp_before.json", fetch_webapp_snapshot(HOTEL_ACCOUNT_ID, args.webapp_url))
-    (EVIDENCE_DIR / "run_command.sh").write_text("#!/usr/bin/env bash\nset -euo pipefail\ncd /home/asus/revnest/Claw\n" + " ".join(command) + "\n", encoding="utf-8")
-    (EVIDENCE_DIR / "run_command.sh").chmod(0o755)
+    db_before = db_snapshot(args.database_url, HOTEL_ACCOUNT_ID)
+    webapp_before = fetch_webapp_snapshot(HOTEL_ACCOUNT_ID, args.webapp_url)
 
     agent_result = {"skipped": True, "reason": "Pass --run-agent to execute the full hotel workflow."}
     if args.run_agent:
         agent_result = run_command(command, timeout=args.timeout_seconds + 120)
-    (EVIDENCE_DIR / "agent_stdout.log").write_text(agent_result.get("stdout", json.dumps(agent_result, indent=2)) + "\n", encoding="utf-8")
-
-    write_json(EVIDENCE_DIR / "db_after.json", db_snapshot(args.database_url, HOTEL_ACCOUNT_ID))
-    write_json(EVIDENCE_DIR / "webapp_after.json", fetch_webapp_snapshot(HOTEL_ACCOUNT_ID, args.webapp_url))
+    db_after = db_snapshot(args.database_url, HOTEL_ACCOUNT_ID)
+    webapp_after = fetch_webapp_snapshot(HOTEL_ACCOUNT_ID, args.webapp_url)
     manifest = {
         "account_id": HOTEL_ACCOUNT_ID,
         "agent_command": command,
@@ -218,8 +213,17 @@ def main() -> int:
         "sandbox": "my-assistant",
         "policy": "revnest-safe-pms",
     }
-    write_json(EVIDENCE_DIR / "manifest.json", manifest)
-    (EVIDENCE_DIR / "README.md").write_text(render_readme(manifest), encoding="utf-8")
+    if not args.no_write:
+        EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        write_json(EVIDENCE_DIR / "db_before.json", db_before)
+        write_json(EVIDENCE_DIR / "webapp_before.json", webapp_before)
+        (EVIDENCE_DIR / "run_command.sh").write_text("#!/usr/bin/env bash\nset -euo pipefail\ncd /home/asus/revnest/Claw\n" + " ".join(command) + "\n", encoding="utf-8")
+        (EVIDENCE_DIR / "run_command.sh").chmod(0o755)
+        (EVIDENCE_DIR / "agent_stdout.log").write_text(agent_result.get("stdout", json.dumps(agent_result, indent=2)) + "\n", encoding="utf-8")
+        write_json(EVIDENCE_DIR / "db_after.json", db_after)
+        write_json(EVIDENCE_DIR / "webapp_after.json", webapp_after)
+        write_json(EVIDENCE_DIR / "manifest.json", manifest)
+        (EVIDENCE_DIR / "README.md").write_text(render_readme(manifest), encoding="utf-8")
     print(json.dumps({"ok": True, "evidence_dir": str(EVIDENCE_DIR), **manifest}, indent=2, ensure_ascii=False))
     return 0
 

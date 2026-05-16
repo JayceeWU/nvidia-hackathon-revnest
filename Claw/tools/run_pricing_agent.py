@@ -37,8 +37,11 @@ DEFAULT_NEMOCLAW_SANDBOX = "my-assistant"
 DEFAULT_NEMOCLAW_WORKDIR = "/sandbox/RevNest/Claw"
 DEFAULT_RUNTIME_MODE = "split-demo"
 DEFAULT_OPENCLAW_AGENT = os.environ.get("REVNEST_OPENCLAW_AGENT", "main")
+DEFAULT_OPENCLAW_MAX_ATTEMPTS = int(os.environ.get("REVNEST_OPENCLAW_MAX_ATTEMPTS", "2"))
+DEFAULT_OPENCLAW_IDLE_RETRY_SECONDS = int(os.environ.get("REVNEST_OPENCLAW_IDLE_RETRY_SECONDS", "60"))
 WORKFLOW_NAME = "pricing-workflow"
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+LIFECYCLE_STAGES = {"agent_start", "agent_finish", "wrapper_retry"}
 
 US_STATE_CODES = {
     "alabama": "AL",
@@ -1048,6 +1051,26 @@ def compact_output_tail(value: str, limit: int = 900) -> str:
     return " ".join(str(value or "").strip().split())[-limit:]
 
 
+def progress_events_for_run(log_path: Path, run_id: str) -> list[dict]:
+    if not log_path.exists():
+        return []
+    events = []
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("run_id") == run_id:
+            events.append(event)
+    return events
+
+
+def has_business_progress(log_path: Path, run_id: str) -> bool:
+    return any(event.get("stage") not in LIFECYCLE_STAGES for event in progress_events_for_run(log_path, run_id))
+
+
 class RuntimeSetupError(RuntimeError):
     pass
 
@@ -1269,6 +1292,11 @@ def prepare_openclaw_command(
         "agents=data.setdefault('agents',{});"
         "defaults=agents.setdefault('defaults',{});"
         "defaults['workspace']=workdir;"
+        "tools=data.setdefault('tools',{});"
+        "tools['exec']={'host':'auto','security':'full','ask':'off','askFallback':'full'};"
+        "approval_dir=runtime/'home'/'.openclaw';"
+        "approval_dir.mkdir(parents=True,exist_ok=True);"
+        "(approval_dir/'exec-approvals.json').write_text(json.dumps({'version':1,'defaults':{'security':'full','ask':'off','askFallback':'full'},'agents':{}}));"
         "(runtime/'agents'/agent_id/'agent').mkdir(parents=True,exist_ok=True);"
         "entry={'id':agent_id,'default':True,'workspace':workdir,'agentDir':str(runtime/'agents'/agent_id/'agent')};"
         "agents['list']=[entry]+[item for item in agents.get('list',[]) if item.get('id')!=agent_id];"
@@ -1291,6 +1319,7 @@ def prepare_openclaw_command(
         f'python3 -c {shlex.quote(runtime_config_code)} "$runtime_dir" "$PWD" {shlex.quote(args.agent)}; '
         'export OPENCLAW_STATE_DIR="$runtime_dir"; '
         'export OPENCLAW_CONFIG_PATH="$runtime_dir/openclaw.json"; '
+        'export HOME="$runtime_dir/home"; '
         'export PATH="/tmp/npm-global/bin:${PATH:-}"; '
         'export NODE_PATH="/sandbox/RevNest/Claw/node_modules:/tmp/npm-global/lib/node_modules:${NODE_PATH:-}"; '
         'msg_file=$1; shift; exec openclaw agent "$@" --message "$(cat "$msg_file")"'
@@ -1555,7 +1584,13 @@ def reader_thread(pipe, output_queue: queue.Queue[str]) -> None:
         pipe.close()
 
 
-def run_openclaw(cmd: list[str], env: dict[str, str], timeout_seconds: int) -> tuple[int, str, bool]:
+def run_openclaw(
+    cmd: list[str],
+    env: dict[str, str],
+    timeout_seconds: int,
+    idle_timeout_seconds: int,
+    log_path: Path,
+) -> tuple[int, str, str | None]:
     try:
         proc = subprocess.Popen(
             cmd,
@@ -1567,15 +1602,17 @@ def run_openclaw(cmd: list[str], env: dict[str, str], timeout_seconds: int) -> t
             bufsize=1,
         )
     except FileNotFoundError as exc:
-        return 127, str(exc), False
+        return 127, str(exc), None
 
     output_queue: queue.Queue[str] = queue.Queue()
     thread = threading.Thread(target=reader_thread, args=(proc.stdout, output_queue), daemon=True)
     thread.start()
 
     started = time.monotonic()
+    last_progress_at = started
+    last_progress_size = log_path.stat().st_size if log_path.exists() else 0
     chunks: list[str] = []
-    timed_out = False
+    stop_reason = None
 
     while True:
         try:
@@ -1590,8 +1627,23 @@ def run_openclaw(cmd: list[str], env: dict[str, str], timeout_seconds: int) -> t
         if proc.poll() is not None:
             break
 
+        current_progress_size = log_path.stat().st_size if log_path.exists() else 0
+        if current_progress_size != last_progress_size:
+            last_progress_size = current_progress_size
+            last_progress_at = time.monotonic()
+
         if timeout_seconds and time.monotonic() - started > timeout_seconds:
-            timed_out = True
+            stop_reason = "wrapper timeout"
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
+            break
+
+        if idle_timeout_seconds and time.monotonic() - last_progress_at > idle_timeout_seconds:
+            stop_reason = f"no Revy progress events for {idle_timeout_seconds} seconds"
             proc.terminate()
             try:
                 proc.wait(timeout=10)
@@ -1609,7 +1661,7 @@ def run_openclaw(cmd: list[str], env: dict[str, str], timeout_seconds: int) -> t
         chunks.append(line)
 
     thread.join(timeout=1)
-    return proc.returncode if proc.returncode is not None else 124, "".join(chunks[-400:]), timed_out
+    return proc.returncode if proc.returncode is not None else 124, "".join(chunks[-400:]), stop_reason
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1639,6 +1691,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=900,
         help="OpenClaw agent timeout in seconds; the wrapper allows a short grace period",
+    )
+    parser.add_argument(
+        "--idle-retry-seconds",
+        type=int,
+        default=DEFAULT_OPENCLAW_IDLE_RETRY_SECONDS,
+        help="Retry the OpenClaw attempt when it writes no Revy progress events for this many seconds",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_OPENCLAW_MAX_ATTEMPTS,
+        help="Maximum OpenClaw attempts before reporting failure",
     )
     parser.add_argument("--clear-log", action="store_true", help="Clear the progress log before starting")
     parser.add_argument("--preserve-log", action="store_true", help="Deprecated alias for the default behavior")
@@ -1738,6 +1802,12 @@ def main() -> int:
     env = load_dotenv(os.environ)
     env["REVNEST_PROGRESS_WRAPPER"] = "1"
     wrapper_timeout = args.timeout_seconds + 30 if args.timeout_seconds else 0
+    max_attempts = max(1, int(args.max_attempts or 1))
+    idle_retry_seconds = max(0, int(args.idle_retry_seconds or 0))
+    returncode = 127
+    output_tail = ""
+    stop_reason = None
+    empty_success = False
     try:
         args = resolve_runtime_inputs(args, env)
         message = build_message(message_args_for_runtime(args))
@@ -1747,29 +1817,68 @@ def main() -> int:
             env=env,
             wrapper_timeout=wrapper_timeout,
         )
-        returncode, output_tail, timed_out = run_openclaw(cmd, cmd_env, wrapper_timeout)
     except (RuntimeSetupError, RuntimeError, ValueError) as exc:
         print(f"[wrapper] {exc}", flush=True)
-        returncode, output_tail, timed_out = 127, str(exc), False
+        returncode, output_tail = 127, str(exc)
+        stop_reason = None
+    else:
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                log_event(
+                    run_id=args.run_id,
+                    stage="wrapper_retry",
+                    status="started",
+                    message=f"Retrying OpenClaw pricing workflow attempt {attempt}/{max_attempts}.",
+                    skill=WORKFLOW_NAME,
+                    tool="run_pricing_agent.py",
+                    log_path=log_path,
+                )
+            returncode, output_tail, stop_reason = run_openclaw(
+                cmd,
+                cmd_env,
+                wrapper_timeout,
+                idle_retry_seconds,
+                log_path,
+            )
+            lower_tail = output_tail.lower()
+            model_idle_timeout = "model idle timeout" in lower_tail
+            request_timeout = "request timed out before a response was generated" in lower_tail
+            request_timeout = request_timeout or "increase `agents.defaults.timeoutseconds`" in lower_tail
+            empty_success = returncode == 0 and not has_business_progress(log_path, args.run_id)
+            should_retry = bool(stop_reason) or model_idle_timeout or request_timeout or empty_success
+            if not should_retry or attempt >= max_attempts:
+                break
+            reason = stop_reason or ("empty successful run: no workflow progress was written" if empty_success else "OpenClaw timeout")
+            log_event(
+                run_id=args.run_id,
+                stage="wrapper_retry",
+                status="info",
+                message=f"OpenClaw attempt {attempt}/{max_attempts} did not produce usable progress; retrying.",
+                skill=WORKFLOW_NAME,
+                tool="run_pricing_agent.py",
+                error=reason,
+                log_path=log_path,
+            )
 
     lower_tail = output_tail.lower()
     model_idle_timeout = "model idle timeout" in lower_tail
     request_timeout = "request timed out before a response was generated" in lower_tail
     request_timeout = request_timeout or "increase `agents.defaults.timeoutseconds`" in lower_tail
-    if timed_out:
+    if stop_reason:
         log_event(
             run_id=args.run_id,
             stage="agent_finish",
             status="failed",
-            message=f"OpenClaw pricing workflow agent exceeded {wrapper_timeout} seconds and was stopped",
+            message="OpenClaw pricing workflow agent did not complete",
             skill=WORKFLOW_NAME,
             tool="openclaw agent",
-            error="wrapper timeout",
+            error=stop_reason,
             log_path=log_path,
         )
         return 124
 
-    if returncode == 0 and not model_idle_timeout and not request_timeout:
+    empty_success = returncode == 0 and not has_business_progress(log_path, args.run_id)
+    if returncode == 0 and not model_idle_timeout and not request_timeout and not empty_success:
         log_event(
             run_id=args.run_id,
             stage="agent_finish",
@@ -1785,6 +1894,8 @@ def main() -> int:
         error = "model idle timeout"
     elif request_timeout:
         error = "openclaw request timeout"
+    elif empty_success:
+        error = "OpenClaw returned success but wrote no workflow progress, pending tasks, or conversation updates"
     else:
         error = f"exit code {returncode}"
     compact_tail = compact_output_tail(output_tail)

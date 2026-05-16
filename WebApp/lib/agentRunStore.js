@@ -53,6 +53,10 @@ function inferStatus(events) {
   return "unknown";
 }
 
+function inferError(events) {
+  return [...events].reverse().find((event) => event.error)?.error || null;
+}
+
 export function parseProgressLog(logPath) {
   if (!fs.existsSync(logPath)) return [];
   return fs
@@ -92,6 +96,7 @@ export function getRun(runId) {
     exitCode: run?.process?.exitCode ?? run?.exitCode ?? null,
     logPath,
     startedAt: run?.startedAt || events.find((event) => event.stage === "agent_start")?.timestamp || null,
+    error: inferError(events),
     events,
   };
 }

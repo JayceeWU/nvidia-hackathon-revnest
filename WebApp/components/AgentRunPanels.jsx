@@ -120,6 +120,14 @@ function statusClass(status) {
   return "neutral";
 }
 
+function eventSummary(event, fallback) {
+  if (!event) return fallback;
+  if (event.status === "failed" && event.error) {
+    return `${event.error} Please try Run Revy again.`;
+  }
+  return event.message || event.error || fallback;
+}
+
 export default function AgentRunPanels({
   events = [],
   emptyMessage = "Waiting for the first progress event...",
@@ -135,6 +143,7 @@ export default function AgentRunPanels({
   const isActiveRun = LIVE_RUN_STATUSES.has(runStatus);
   const elapsedSeconds = firstTimestamp ? ((isActiveRun ? now : lastTimestamp || now) - firstTimestamp) / 1000 : 0;
   const workLabel = firstTimestamp && (isActiveRun || isTerminalRun) ? `Worked for ${formatDuration(elapsedSeconds)}` : "Ready";
+  const latestSummary = eventSummary(latestEvent, emptyMessage);
 
   useEffect(() => {
     if (!isActiveRun) return undefined;
@@ -149,7 +158,7 @@ export default function AgentRunPanels({
           <div className="agent-work-strip">
             <span className={`agent-work-dot ${isActiveRun ? "running" : ""}`} />
             <strong>{workLabel}</strong>
-            <span>{latestEvent?.message || emptyMessage}</span>
+            <span className={latestEvent?.status === "failed" ? "agent-work-error" : ""}>{latestSummary}</span>
           </div>
           {visibleEvents.length === 0 ? (
             <div className="console-empty">{emptyMessage}</div>
