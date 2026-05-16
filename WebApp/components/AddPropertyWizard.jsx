@@ -24,6 +24,7 @@ import { humanReadableAirbnbPropertyName } from "@/lib/propertyNames";
 
 const SESSION_KEY = "revnestSession";
 const DRAFT_KEY = "revnestWizardDraft";
+const AIRBNB_RUNTIME_MODE = "host-openclaw";
 
 const airbnbUrlPattern = /^https?:\/\/(?:www\.)?airbnb\.[^/]+\/rooms\/(\d+)/i;
 
@@ -185,6 +186,19 @@ async function saveDraftProperty({ accountId, property }) {
     throw new Error(payload.error || "Failed to save property draft.");
   }
   return payload.property;
+}
+
+async function startAirbnbOpenClawRun(draft) {
+  const response = await fetch("/api/agent-runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...draft,
+      propertyType: "airbnb",
+      runtimeMode: AIRBNB_RUNTIME_MODE,
+    }),
+  });
+  return readJsonResponse(response, "Failed to start the Airbnb OpenClaw run.");
 }
 
 function WizardStepIcon({ active = false, completed = false, icon }) {
@@ -413,17 +427,20 @@ function UrlStep({ session }) {
     setSaving(true);
     try {
       await saveDraftProperty({ accountId: session.id, property });
-      saveStoredJson(DRAFT_KEY, {
+      const draft = {
         accountId: session.id,
         propertyId,
         propertyType: "airbnb",
+        runtimeMode: AIRBNB_RUNTIME_MODE,
         myPlace: property.myPlace,
         minPrice,
         maxPrice,
         pricingHorizon,
         supplementalInfo: property.supplementalInfo,
-      });
-      router.push(`/properties/new/airbnb/run?propertyId=${encodeURIComponent(propertyId)}`);
+      };
+      const run = await startAirbnbOpenClawRun(draft);
+      saveStoredJson(DRAFT_KEY, { ...draft, runId: run.runId, conversationId: run.conversationId });
+      router.push(`/properties/new/airbnb/run?propertyId=${encodeURIComponent(propertyId)}&runId=${encodeURIComponent(run.runId)}`);
     } catch (saveError) {
       setError(saveError.message);
     } finally {
@@ -456,7 +473,7 @@ function UrlStep({ session }) {
       <div className="wizard-actions url-import-actions">
         <button type="button" className="secondary-button compact-button" onClick={() => router.push("/properties/new/airbnb/source")}>Back</button>
         <button type="submit" className="primary-action" form="airbnb-url-form" disabled={saving}>
-          {saving ? "Saving…" : "Next"}
+          {saving ? "Starting Revy…" : "Start Revy with OpenClaw"}
           <ArrowRightIcon width={14} height={14} />
         </button>
       </div>
@@ -509,6 +526,7 @@ function ManualStep({ session }) {
     const basePrice = minPrice;
     const resolvedLocation = zipCodeOptions.find((zipOption) => zipOption.zipCode === form.zipCode.trim())?.location ?? "United States ZIP area";
     const generatedName = `${resolvedLocation} Airbnb Stay ${form.roomCount || 1}`;
+    const manualMarketSearchUrl = `https://www.airbnb.com/s/${encodeURIComponent(resolvedLocation)}/homes`;
     const propertyId = `airbnb-manual-${Date.now()}`;
     const property = {
       id: propertyId,
@@ -534,6 +552,8 @@ function ManualStep({ session }) {
       importFromAirbnb: false,
       status: "draft",
       onboardingSource: "airbnb_manual",
+      manualMarketSearchUrl,
+      myPlace: manualMarketSearchUrl,
       minPrice,
       maxPrice,
       pricingHorizon,
@@ -548,9 +568,12 @@ function ManualStep({ session }) {
         accountId: session.id,
         propertyId,
         propertyType: "airbnb",
+        runtimeMode: AIRBNB_RUNTIME_MODE,
+        myPlace: property.myPlace,
         minPrice,
         maxPrice,
         pricingHorizon,
+        supplementalInfo: property.additionalInfo,
       });
       router.push(`/properties/new/airbnb/run?propertyId=${encodeURIComponent(propertyId)}`);
     } catch (saveError) {
@@ -899,7 +922,7 @@ function RunStep({ session, initialPropertyId, initialRunId = "" }) {
 
         {error ? <div className="form-error">{error}</div> : null}
 
-        <AgentRunPanels events={events} />
+        <AgentRunPanels events={events} runStatus={run?.status} startedAt={run?.startedAt} />
 
         {canStopRun ? (
           <button

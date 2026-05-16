@@ -27,6 +27,22 @@ The transcript proves:
    `acceptedBy`, `acceptedAt`, `approvalSource: "webapp_accept_button"`, and
    `mockHotelSync`.
 
+## Full Hotel Agent Run Evidence Layout
+
+Prepare the saved evidence folder for a complete hotel NemoClaw run:
+
+```bash
+python3 /home/asus/revnest/Claw/tests/run_full_hotel_agent_evidence_design.py
+```
+
+This writes `full_hotel_agent_run/` with DB before/after snapshots, WebApp
+dashboard API snapshots, and the exact `run_command.sh` for the live run. To
+execute the long agent workflow and capture stdout, run:
+
+```bash
+python3 /home/asus/revnest/Claw/tests/run_full_hotel_agent_evidence_design.py --run-agent
+```
+
 ## Fixed Security State
 
 The sandbox is locked with shields:

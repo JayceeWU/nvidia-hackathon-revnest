@@ -70,6 +70,144 @@
     "pendingTasks": [
       {
         "action": "Price adjustment required",
+        "agentSuggestedAt": "May 9, 2026 1:18 PM",
+        "agentSuggestedPrice": "$735",
+        "approvalGateLabel": "Approval required",
+        "approvalRequirement": "required",
+        "change": "+10%",
+        "changeType": "Increase",
+        "classification": "price_adjustment_required",
+        "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "classificationLabel": "Price adjustment required",
+        "confidenceLow": false,
+        "currency": "USD",
+        "currentPrice": "$670",
+        "deviationAbs": 65,
+        "deviationPct": 0.097,
+        "guardrailIssue": false,
+        "id": "task-dream-inn-004",
+        "materialDifference": true,
+        "mockHotelCurrentPrice": 670,
+        "outsideStrategyRange": true,
+        "priceDate": "2026-05-17",
+        "priceDirection": "Increase",
+        "property": "Premium Ocean View Two Queen",
+        "propertyId": "dream-inn-premium-ocean-view-two-queen",
+        "property_id": "dream-inn-premium-ocean-view-two-queen",
+        "reason": "Premium two-queen inventory is scarce, and ocean-view demand supports a guarded lift inside the saved ceiling.",
+        "reviewDrivers": [
+          "current MockHotel price is below Revy's strategy range",
+          "final recommendation differs by $65 and +10%"
+        ],
+        "reviewReason": "current MockHotel price is below Revy's strategy range; final recommendation differs by $65 and +10%",
+        "revySuggestedPrice": 735,
+        "runId": "seed-hotel-safe-pms-demo",
+        "source": "mockhotel_price_review",
+        "status": "Needs approval",
+        "strategyRange": {
+          "currentPosition": "below_range",
+          "high": 780,
+          "low": 700
+        },
+        "taskType": "price_adjustment_required",
+        "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "taskTypeLabel": "Price adjustment required",
+        "type": "Price adjustment required"
+      },
+      {
+        "action": "Price adjustment required",
+        "agentSuggestedAt": "May 9, 2026 1:31 PM",
+        "agentSuggestedPrice": "$585",
+        "approvalGateLabel": "Approval required",
+        "approvalRequirement": "required",
+        "change": "+11%",
+        "changeType": "Increase",
+        "classification": "price_adjustment_required",
+        "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "classificationLabel": "Price adjustment required",
+        "confidenceLow": false,
+        "currency": "USD",
+        "currentPrice": "$529",
+        "deviationAbs": 56,
+        "deviationPct": 0.1059,
+        "guardrailIssue": false,
+        "id": "task-dream-inn-005",
+        "materialDifference": true,
+        "mockHotelCurrentPrice": 529,
+        "outsideStrategyRange": true,
+        "priceDate": "2026-05-18",
+        "priceDirection": "Increase",
+        "property": "Beachfront King",
+        "propertyId": "dream-inn-beachfront-king",
+        "property_id": "dream-inn-beachfront-king",
+        "reason": "Beachfront King historical highs and direct beach access support a controlled near-term lift.",
+        "reviewDrivers": [
+          "current MockHotel price is below Revy's strategy range",
+          "final recommendation differs by $56 and +11%"
+        ],
+        "reviewReason": "current MockHotel price is below Revy's strategy range; final recommendation differs by $56 and +11%",
+        "revySuggestedPrice": 585,
+        "runId": "seed-hotel-safe-pms-demo",
+        "source": "mockhotel_price_review",
+        "status": "Needs approval",
+        "strategyRange": {
+          "currentPosition": "below_range",
+          "high": 640,
+          "low": 560
+        },
+        "taskType": "price_adjustment_required",
+        "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "taskTypeLabel": "Price adjustment required",
+        "type": "Price adjustment required"
+      },
+      {
+        "action": "Price adjustment required",
+        "agentSuggestedAt": "May 9, 2026 1:44 PM",
+        "agentSuggestedPrice": "$335",
+        "approvalGateLabel": "Approval required",
+        "approvalRequirement": "required",
+        "change": "-4%",
+        "changeType": "Decrease",
+        "classification": "price_adjustment_required",
+        "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "classificationLabel": "Price adjustment required",
+        "confidenceLow": false,
+        "currency": "USD",
+        "currentPrice": "$350",
+        "deviationAbs": 15,
+        "deviationPct": 0.0429,
+        "guardrailIssue": false,
+        "id": "task-dream-inn-006",
+        "materialDifference": false,
+        "mockHotelCurrentPrice": 350,
+        "outsideStrategyRange": true,
+        "priceDate": "2026-05-19",
+        "priceDirection": "Decrease",
+        "property": "Standard Two Queen",
+        "propertyId": "dream-inn-standard-two-queen",
+        "property_id": "dream-inn-standard-two-queen",
+        "reason": "Standard Two Queen has softer weekday demand, so Revy trims the rate while preserving the room-type floor.",
+        "reviewDrivers": [
+          "current MockHotel price is above Revy's strategy range",
+          "final recommendation differs by $15 and -4%"
+        ],
+        "reviewReason": "current MockHotel price is above Revy's strategy range; final recommendation differs by $15 and -4%",
+        "revySuggestedPrice": 335,
+        "runId": "seed-hotel-safe-pms-demo",
+        "source": "mockhotel_price_review",
+        "status": "Needs approval",
+        "strategyRange": {
+          "currentPosition": "above_range",
+          "high": 340,
+          "low": 300
+        },
+        "taskType": "price_adjustment_required",
+        "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+        "taskTypeLabel": "Price adjustment required",
+        "type": "Price adjustment required"
+      },
+      {
+        "action": "Price adjustment required",
         "agentSuggestedAt": "May 9, 2026 12:39 PM",
         "agentSuggestedPrice": "$515",
         "approvalGateLabel": "Approval required",
@@ -209,6 +347,253 @@
     ],
     "priceLogs": [
       {
+        "adjustedAt": "May 9, 2026 12:48 PM",
+        "agentSignals": [
+          "Four-guest demand",
+          "Ocean-view premium",
+          "Strategy range check"
+        ],
+        "agentSuggestedAt": "May 9, 2026 12:39 PM",
+        "agentSuggestedPrice": "$515",
+        "change": "+12%",
+        "id": "log-dream-inn-004",
+        "newPrice": "$515",
+        "oldPrice": "$460",
+        "priceDate": "May 16, 2026",
+        "property": "Ocean View Two Queen",
+        "propertyId": "dream-inn-ocean-view-two-queen",
+        "reason": "Ocean-view two-queen demand rose with strong four-guest pickup and a below-range PMS rate.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 9, 2026 1:03 PM",
+        "agentSignals": [
+          "Suite scarcity",
+          "Beachfront positioning",
+          "Guardrail ceiling"
+        ],
+        "agentSuggestedAt": "May 9, 2026 12:52 PM",
+        "agentSuggestedPrice": "$1040",
+        "change": "+13%",
+        "id": "log-dream-inn-005",
+        "newPrice": "$1040",
+        "oldPrice": "$923",
+        "priceDate": "May 16, 2026",
+        "property": "Beachfront Suite",
+        "propertyId": "dream-inn-beachfront-suite",
+        "reason": "Suite inventory stayed limited while beachfront search demand supported a protected ceiling.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 9, 2026 1:27 PM",
+        "agentSignals": [
+          "Limited room count",
+          "Ocean-view compression",
+          "Premium tier"
+        ],
+        "agentSuggestedAt": "May 9, 2026 1:18 PM",
+        "agentSuggestedPrice": "$735",
+        "change": "+10%",
+        "id": "log-dream-inn-006",
+        "newPrice": "$735",
+        "oldPrice": "$670",
+        "priceDate": "May 16, 2026",
+        "property": "Premium Ocean View Two Queen",
+        "propertyId": "dream-inn-premium-ocean-view-two-queen",
+        "reason": "Limited premium two-queen supply and ocean-view compression supported a moderate lift.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 9, 2026 1:19 PM",
+        "agentSignals": [
+          "Weekday softness",
+          "Broad inventory",
+          "Minimum guardrail preserved"
+        ],
+        "agentSuggestedAt": "May 9, 2026 1:06 PM",
+        "agentSuggestedPrice": "$305",
+        "change": "-6%",
+        "id": "log-dream-inn-007",
+        "newPrice": "$305",
+        "oldPrice": "$323",
+        "priceDate": "May 16, 2026",
+        "property": "Standard King",
+        "propertyId": "dream-inn-standard-king",
+        "reason": "Revy lowered the broadest inventory tier for a softer weekday while staying above the protected floor.",
+        "type": "Decrease"
+      },
+      {
+        "adjustedAt": "May 9, 2026 1:55 PM",
+        "agentSignals": [
+          "Base tier demand",
+          "Weekday compression",
+          "Room-type floor"
+        ],
+        "agentSuggestedAt": "May 9, 2026 1:44 PM",
+        "agentSuggestedPrice": "$335",
+        "change": "-4%",
+        "id": "log-dream-inn-008",
+        "newPrice": "$335",
+        "oldPrice": "$350",
+        "priceDate": "May 16, 2026",
+        "property": "Standard Two Queen",
+        "propertyId": "dream-inn-standard-two-queen",
+        "reason": "Two-queen base demand was lighter than ocean-view tiers, so Revy trimmed the rate inside guardrails.",
+        "type": "Decrease"
+      },
+      {
+        "adjustedAt": "May 8, 2026 5:26 PM",
+        "agentSignals": [
+          "Weekend demand",
+          "Comp rate lift",
+          "Ocean-view tier"
+        ],
+        "agentSuggestedAt": "May 8, 2026 5:12 PM",
+        "agentSuggestedPrice": "$485",
+        "change": "+11%",
+        "id": "log-dream-inn-009",
+        "newPrice": "$485",
+        "oldPrice": "$438",
+        "priceDate": "May 15, 2026",
+        "property": "Ocean View King",
+        "propertyId": "dream-inn-ocean-view-king",
+        "reason": "Ocean-view king demand strengthened with higher weekend intent and comp rates above the PMS price.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 8, 2026 5:47 PM",
+        "agentSignals": [
+          "Family demand",
+          "Beachfront comps",
+          "Inventory pressure"
+        ],
+        "agentSuggestedAt": "May 8, 2026 5:34 PM",
+        "agentSuggestedPrice": "$675",
+        "change": "+11%",
+        "id": "log-dream-inn-010",
+        "newPrice": "$675",
+        "oldPrice": "$610",
+        "priceDate": "May 15, 2026",
+        "property": "Beachfront Two Queen",
+        "propertyId": "dream-inn-beachfront-two-queen",
+        "reason": "Beachfront two-queen inventory carried strong family demand and higher beachfront comp pressure.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 8, 2026 1:58 PM",
+        "agentSignals": [
+          "Premium scarcity",
+          "Upsell demand",
+          "Ocean-view rate ladder"
+        ],
+        "agentSuggestedAt": "May 8, 2026 1:44 PM",
+        "agentSuggestedPrice": "$690",
+        "change": "+11%",
+        "id": "log-dream-inn-011",
+        "newPrice": "$690",
+        "oldPrice": "$620",
+        "priceDate": "May 14, 2026",
+        "property": "Premium Ocean View King",
+        "propertyId": "dream-inn-premium-ocean-view-king",
+        "reason": "Premium king scarcity and ocean-view upsell signals supported a higher guarded rate.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 7, 2026 6:20 PM",
+        "agentSignals": [
+          "Shoulder night",
+          "Beachfront history",
+          "Floor preserved"
+        ],
+        "agentSuggestedAt": "May 7, 2026 6:08 PM",
+        "agentSuggestedPrice": "$560",
+        "change": "-4%",
+        "id": "log-dream-inn-012",
+        "newPrice": "$560",
+        "oldPrice": "$585",
+        "priceDate": "May 14, 2026",
+        "property": "Beachfront King",
+        "propertyId": "dream-inn-beachfront-king",
+        "reason": "Revy eased the beachfront king rate for a shoulder-night demand pocket without breaking the floor.",
+        "type": "Decrease"
+      },
+      {
+        "adjustedAt": "May 7, 2026 3:24 PM",
+        "agentSignals": [
+          "Midweek pickup",
+          "Ocean-view history",
+          "Approved range"
+        ],
+        "agentSuggestedAt": "May 7, 2026 3:10 PM",
+        "agentSuggestedPrice": "$498",
+        "change": "-3%",
+        "id": "log-dream-inn-013",
+        "newPrice": "$498",
+        "oldPrice": "$515",
+        "priceDate": "May 13, 2026",
+        "property": "Ocean View Two Queen",
+        "propertyId": "dream-inn-ocean-view-two-queen",
+        "reason": "Midweek pickup softened, so Revy nudged ocean-view two-queen pricing down within the approved range.",
+        "type": "Decrease"
+      },
+      {
+        "adjustedAt": "May 7, 2026 2:57 PM",
+        "agentSignals": [
+          "Suite resilience",
+          "Premium tier",
+          "Demand separation"
+        ],
+        "agentSuggestedAt": "May 7, 2026 2:42 PM",
+        "agentSuggestedPrice": "$1015",
+        "change": "+4%",
+        "id": "log-dream-inn-014",
+        "newPrice": "$1015",
+        "oldPrice": "$980",
+        "priceDate": "May 13, 2026",
+        "property": "Beachfront Suite",
+        "propertyId": "dream-inn-beachfront-suite",
+        "reason": "Suite demand remained resilient even as lower tiers softened, preserving a premium rate lift.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 6, 2026 4:43 PM",
+        "agentSignals": [
+          "Late pickup",
+          "Baseline recovery",
+          "Guardrail headroom"
+        ],
+        "agentSuggestedAt": "May 6, 2026 4:30 PM",
+        "agentSuggestedPrice": "$318",
+        "change": "+8%",
+        "id": "log-dream-inn-015",
+        "newPrice": "$318",
+        "oldPrice": "$295",
+        "priceDate": "May 12, 2026",
+        "property": "Standard King",
+        "propertyId": "dream-inn-standard-king",
+        "reason": "Revy restored Standard King pricing after late pickup improved against the prior soft baseline.",
+        "type": "Increase"
+      },
+      {
+        "adjustedAt": "May 6, 2026 4:11 PM",
+        "agentSignals": [
+          "Suite comp check",
+          "Premium positioning",
+          "Competitive adjustment"
+        ],
+        "agentSuggestedAt": "May 6, 2026 3:58 PM",
+        "agentSuggestedPrice": "$1005",
+        "change": "-3%",
+        "id": "log-dream-inn-016",
+        "newPrice": "$1005",
+        "oldPrice": "$1040",
+        "priceDate": "May 12, 2026",
+        "property": "Beachfront Suite",
+        "propertyId": "dream-inn-beachfront-suite",
+        "reason": "A small suite adjustment kept the price competitive while preserving beachfront premium positioning.",
+        "type": "Decrease"
+      },
+      {
         "adjustedAt": "May 8, 2026 4:05 PM",
         "agentSignals": [
           "Beachfront room history",
@@ -265,10 +650,14 @@
     ],
     "properties": [
       {
-        "activeAgentRunId": null,
+        "activeAgentRunId": "pricing-workflow-dream-inn-beachfront-king-1778946666366",
+        "activeRevyConversationId": "hotel-revy-001",
         "adr": "$529",
         "agentAdr": 529,
-        "agentRunStatus": null,
+        "agentRunFinishedAt": "2026-05-16T15:51:40.453812Z",
+        "agentRunHotelScope": "room-type",
+        "agentRunRuntimeMode": "split-demo",
+        "agentRunStatus": "failed",
         "amenities": [
           "Beachfront",
           "Ocean view",
@@ -284,9 +673,17 @@
         "city": "Santa Cruz",
         "county": "Santa Cruz County",
         "fixedPrice": 529,
-        "forecast": [],
+        "forecast": [
+          {
+            "agent": 585,
+            "day": "May 18",
+            "fixed": 529
+          }
+        ],
         "guests": "1-2 guests",
         "id": "dream-inn-beachfront-king",
+        "lastAgentRunId": "pricing-workflow-dream-inn-beachfront-king-1778946666366",
+        "lastRevyConversationId": "hotel-revy-001",
         "location": "Santa Cruz, CA",
         "maxPrice": 1100,
         "maxPriceCents": 110000,
@@ -299,8 +696,8 @@
         "planDuration": "3 days",
         "priceRange": "$230-$1100",
         "pricingConnection": "hotel-pms-main",
-        "pricingHorizon": 3,
-        "propertyType": "Hotel Room Type",
+        "pricingHorizon": 7,
+        "propertyType": "hotel",
         "revpar": "$365",
         "revparLift": "Baseline from RMS history",
         "roomCount": 20,
@@ -592,7 +989,13 @@
         "city": "Santa Cruz",
         "county": "Santa Cruz County",
         "fixedPrice": 670,
-        "forecast": [],
+        "forecast": [
+          {
+            "agent": 735,
+            "day": "May 17",
+            "fixed": 670
+          }
+        ],
         "guests": "1-4 guests",
         "id": "dream-inn-premium-ocean-view-two-queen",
         "location": "Santa Cruz, CA",
@@ -700,7 +1103,13 @@
         "city": "Santa Cruz",
         "county": "Santa Cruz County",
         "fixedPrice": 350,
-        "forecast": [],
+        "forecast": [
+          {
+            "agent": 335,
+            "day": "May 19",
+            "fixed": 350
+          }
+        ],
         "guests": "1-4 guests",
         "id": "dream-inn-standard-two-queen",
         "location": "Santa Cruz, CA",

@@ -4,6 +4,41 @@ import { query } from "@/lib/db";
 
 export const runtime = "nodejs";
 
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]);
+
+function finalEventTimestamp(run) {
+  const event = [...(run.events || [])]
+    .reverse()
+    .find((item) => item.stage === "agent_finish" || TERMINAL_RUN_STATUSES.has(item.status));
+  return event?.timestamp || new Date().toISOString();
+}
+
+async function finalizePropertyRun({ accountId, propertyId, runId, run }) {
+  if (!TERMINAL_RUN_STATUSES.has(run.status)) return;
+
+  await query(
+    `
+      UPDATE property
+      SET data = data - 'activeAgentRunId' - 'agentRunStartedAt' - 'agentRunHotelScope' || $4::jsonb,
+          updated_at = now()
+      WHERE id = $1
+        AND account_id = $2::uuid
+        AND data->>'activeAgentRunId' = $3
+    `,
+    [
+      propertyId,
+      accountId,
+      runId,
+      JSON.stringify({
+        lastAgentRunId: runId,
+        agentRunStatus: run.status,
+        agentRunFinishedAt: finalEventTimestamp(run),
+        ...(run.conversationId ? { lastRevyConversationId: run.conversationId } : {}),
+      }),
+    ],
+  );
+}
+
 export async function getRevyThinkingStatus(accountId) {
   const propertyResult = await query(
     `
@@ -26,9 +61,11 @@ export async function getRevyThinkingStatus(accountId) {
         propertyId: row.id,
         conversationId: row.data?.activeRevyConversationId || null,
         status: "running",
+        startedAt: run.startedAt || row.data?.agentRunStartedAt || null,
         updatedAt: new Date().toISOString(),
       };
     }
+    await finalizePropertyRun({ accountId, propertyId: row.id, runId, run });
   }
 
   return {
@@ -37,6 +74,7 @@ export async function getRevyThinkingStatus(accountId) {
     propertyId: null,
     conversationId: null,
     status: "idle",
+    startedAt: null,
     updatedAt: new Date().toISOString(),
   };
 }

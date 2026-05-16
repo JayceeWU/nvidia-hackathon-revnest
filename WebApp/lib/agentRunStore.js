@@ -25,6 +25,22 @@ function normalizePropertyType(value) {
   return null;
 }
 
+function normalizeRuntimeMode(value, propertyType) {
+  if (propertyType === "airbnb") return "host-openclaw";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["split-demo", "auto", "host-openclaw", "nemoclaw"].includes(normalized)) {
+    return normalized;
+  }
+  return "split-demo";
+}
+
+function normalizeHotelScope(value, propertyType) {
+  if (propertyType !== "hotel") return null;
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "all-room-types") return "all-room-types";
+  return "room-type";
+}
+
 function runLogPath(runId) {
   return path.join(runsDir, `${runId}.log`);
 }
@@ -64,18 +80,24 @@ export function getRun(runId) {
   }
   return {
     runId,
+    accountId: run?.accountId,
     propertyId: run?.propertyId,
+    propertyIds: run?.propertyIds || [],
+    propertyType: run?.propertyType,
+    hotelScope: run?.hotelScope || null,
+    runtimeMode: run?.runtimeMode,
     conversationId: run?.conversationId,
     status,
     exitCode: run?.process?.exitCode ?? run?.exitCode ?? null,
     logPath,
+    startedAt: run?.startedAt || events.find((event) => event.stage === "agent_start")?.timestamp || null,
     events,
   };
 }
 
 export function getRunsForProperty(propertyId) {
   return [...runs.values()]
-    .filter((run) => run.propertyId === propertyId)
+    .filter((run) => run.propertyId === propertyId || (Array.isArray(run.propertyIds) && run.propertyIds.includes(propertyId)))
     .map((run) => getRun(run.runId))
     .sort((left, right) => {
       const leftStarted = runs.get(left.runId)?.startedAt || "";
@@ -99,10 +121,13 @@ export function startAgentRun(payload) {
   if (!propertyType) {
     throw new Error("propertyType must resolve to airbnb or hotel");
   }
+  const runtimeMode = normalizeRuntimeMode(payload.runtimeMode ?? payload.runtime_mode, propertyType);
+  const hotelScope = normalizeHotelScope(payload.hotelScope ?? payload.hotel_scope, propertyType);
 
   const now = Date.now();
-  const conversationId = payload.conversationId || `revy-${sanitize(payload.propertyId || payload.myPlace || propertyType)}-${now}`;
-  const runId = `pricing-workflow-${sanitize(payload.propertyId || payload.myPlace || propertyType)}-${now}`;
+  const runSubject = hotelScope === "all-room-types" ? "hotel-all-room-types" : payload.propertyId || payload.myPlace || propertyType;
+  const conversationId = payload.conversationId || `revy-${sanitize(runSubject)}-${now}`;
+  const runId = `pricing-workflow-${sanitize(runSubject)}-${now}`;
   const logPath = runLogPath(runId);
   const args = [
     "tools/run_pricing_agent.py",
@@ -119,6 +144,9 @@ export function startAgentRun(payload) {
     payload.accountId,
     "--property-type",
     propertyType,
+    ...(hotelScope ? ["--hotel-scope", hotelScope] : []),
+    "--runtime-mode",
+    runtimeMode,
     "--thinking",
     "medium",
     "--timeout-seconds",
@@ -159,7 +187,12 @@ export function startAgentRun(payload) {
   const run = {
     runId,
     conversationId,
+    accountId: payload.accountId,
     propertyId: payload.propertyId,
+    propertyIds: Array.isArray(payload.propertyIds) ? payload.propertyIds : [],
+    propertyType,
+    hotelScope,
+    runtimeMode,
     logPath,
     process: child,
     status: "running",
@@ -177,7 +210,11 @@ export function startAgentRun(payload) {
   return {
     runId,
     conversationId,
+    accountId: payload.accountId,
     propertyId: payload.propertyId,
+    propertyIds: Array.isArray(payload.propertyIds) ? payload.propertyIds : [],
+    hotelScope,
+    runtimeMode,
     status: "running",
     logPath,
     startedAt: run.startedAt,
@@ -201,7 +238,8 @@ export function stopAgentRun(runId) {
 export function stopAgentRunsForProperty(propertyId) {
   const stopped = [];
   for (const [runId, run] of runs.entries()) {
-    if (run.propertyId !== propertyId || run.status !== "running") {
+    const ownsProperty = run.propertyId === propertyId || (Array.isArray(run.propertyIds) && run.propertyIds.includes(propertyId));
+    if (!ownsProperty || run.status !== "running") {
       continue;
     }
     stopped.push(stopAgentRun(runId));

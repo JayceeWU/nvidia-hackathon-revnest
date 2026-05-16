@@ -7,8 +7,8 @@ This folder is the fixed evidence layout for the live hotel NemoClaw run.
 - Account: `00000000-0000-0000-0000-000000000103`
 - Runtime: Hotel -> NemoClaw `my-assistant`
 - Policy: `revnest-safe-pms`
-- Run id: `hotel-full-evidence-20260516T145841Z`
-- Generated at: `2026-05-16T14:58:41Z`
+- Run id: `hotel-full-evidence-20260516T160957Z`
+- Generated at: `2026-05-16T16:09:57Z`
 - Agent executed: `false`
 
 ## Evidence Files
@@ -24,7 +24,7 @@ This folder is the fixed evidence layout for the live hotel NemoClaw run.
 ## Live Run Command
 
 ```bash
-python3 tools/run_pricing_agent.py --clear-log --account-id 00000000-0000-0000-0000-000000000103 --property-type hotel --hotel-scope all-room-types --runtime-mode nemoclaw --session-id hotel-full-evidence-20260516T145841Z --run-id hotel-full-evidence-20260516T145841Z --thinking medium --verbose on --timeout-seconds 1800
+python3 tools/run_pricing_agent.py --clear-log --account-id 00000000-0000-0000-0000-000000000103 --property-type hotel --hotel-scope all-room-types --runtime-mode nemoclaw --session-id hotel-full-evidence-20260516T160957Z --run-id hotel-full-evidence-20260516T160957Z --thinking medium --verbose on --timeout-seconds 1800
 ```
 
 ## Judge Story

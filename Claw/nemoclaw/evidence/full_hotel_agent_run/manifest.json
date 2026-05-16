@@ -13,9 +13,9 @@
     "--runtime-mode",
     "nemoclaw",
     "--session-id",
-    "hotel-full-evidence-20260516T145841Z",
+    "hotel-full-evidence-20260516T160957Z",
     "--run-id",
-    "hotel-full-evidence-20260516T145841Z",
+    "hotel-full-evidence-20260516T160957Z",
     "--thinking",
     "medium",
     "--verbose",
@@ -28,9 +28,9 @@
     "reason": "Pass --run-agent to execute the full hotel workflow.",
     "skipped": true
   },
-  "generated_at": "2026-05-16T14:58:41Z",
+  "generated_at": "2026-05-16T16:09:57Z",
   "policy": "revnest-safe-pms",
-  "run_id": "hotel-full-evidence-20260516T145841Z",
+  "run_id": "hotel-full-evidence-20260516T160957Z",
   "runtime": "hotel-nemoclaw",
   "sandbox": "my-assistant"
 }

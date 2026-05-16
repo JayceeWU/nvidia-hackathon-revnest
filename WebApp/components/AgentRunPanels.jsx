@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckIcon } from "./AgentIcons";
+import { useEffect, useMemo, useState } from "react";
+import { CheckIcon, StepIcon } from "./AgentIcons";
 
 export const TOOL_STAGES = [
   { stage: "context", label: "agent-browser", icon: "skill" },
@@ -35,29 +36,143 @@ export function buildCompletedAgentEvents(propertyName = "this property") {
   ];
 }
 
-export default function AgentRunPanels({ events = [], emptyMessage = "Waiting for the first progress event..." }) {
-  const visibleEvents = Array.isArray(events) ? events : [];
+const ACTIVE_STATUSES = new Set(["started", "running", "info"]);
+const DONE_STATUSES = new Set(["completed", "skipped"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "skipped", "stopped"]);
+
+function eventIdentity(event) {
+  if (event.stage === "agent_start" || event.stage === "agent_finish") {
+    return "agent_lifecycle::openclaw agent";
+  }
+  return [
+    event.stage || "stage",
+    event.substage || "",
+    event.tool || event.called_skill || event.skill || "",
+  ].join("::");
+}
+
+function eventIconName(event) {
+  const match = TOOL_STAGES.find((stage) => stage.stage === event.stage);
+  return match?.icon || "skill";
+}
+
+function eventTitle(event) {
+  return event.tool || event.called_skill || event.substage || event.stage || "agent step";
+}
+
+function eventDetail(event) {
+  const parts = [event.stage, event.substage].filter(Boolean);
+  return parts.join(" / ");
+}
+
+function compactEvents(events) {
+  const compacted = [];
+  const indexes = new Map();
+
+  for (const event of Array.isArray(events) ? events : []) {
+    const key = eventIdentity(event);
+    const existingIndex = indexes.get(key);
+    const next = {
+      ...event,
+      iconName: eventIconName(event),
+      title: eventTitle(event),
+      detail: eventDetail(event),
+    };
+
+    if (existingIndex === undefined) {
+      indexes.set(key, compacted.length);
+      compacted.push(next);
+      continue;
+    }
+
+    const existing = compacted[existingIndex];
+    compacted[existingIndex] = {
+      ...existing,
+      ...next,
+      startedAt: existing.startedAt || existing.timestamp,
+      completedAt: TERMINAL_STATUSES.has(next.status) ? next.timestamp : existing.completedAt,
+    };
+  }
+
+  return compacted;
+}
+
+function parseTime(value) {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0s";
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  if (minutes <= 0) return `${remainingSeconds}s`;
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+function statusClass(status) {
+  if (status === "failed" || status === "stopped") return "failed";
+  if (DONE_STATUSES.has(status)) return "done";
+  if (ACTIVE_STATUSES.has(status)) return "running";
+  return "neutral";
+}
+
+export default function AgentRunPanels({
+  events = [],
+  emptyMessage = "Waiting for the first progress event...",
+  runStatus = "idle",
+  startedAt = null,
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const visibleEvents = useMemo(() => compactEvents(events), [events]);
+  const latestEvent = visibleEvents[visibleEvents.length - 1] || null;
+  const firstTimestamp = parseTime(startedAt) || parseTime(visibleEvents[0]?.timestamp);
+  const lastTimestamp = parseTime(latestEvent?.completedAt || latestEvent?.timestamp);
+  const isTerminalRun = TERMINAL_STATUSES.has(runStatus);
+  const isActiveRun = runStatus === "running" || (!isTerminalRun && visibleEvents.some((event) => ACTIVE_STATUSES.has(event.status)));
+  const elapsedSeconds = firstTimestamp ? ((isActiveRun ? now : lastTimestamp || now) - firstTimestamp) / 1000 : 0;
+  const workLabel = firstTimestamp ? `Worked for ${formatDuration(elapsedSeconds)}` : "Ready";
+
+  useEffect(() => {
+    if (!isActiveRun) return undefined;
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [isActiveRun]);
 
   return (
     <div className="live-agent-grid console-only">
       <div className="live-console">
         <div className="console-screen" role="log" aria-live="polite">
+          <div className="agent-work-strip">
+            <span className={`agent-work-dot ${isActiveRun ? "running" : ""}`} />
+            <strong>{workLabel}</strong>
+            <span>{latestEvent?.message || emptyMessage}</span>
+          </div>
           {visibleEvents.length === 0 ? (
             <div className="console-empty">{emptyMessage}</div>
           ) : (
             visibleEvents.map((event, index) => (
               <div
                 key={`${event.timestamp || "event"}-${event.stage}-${index}`}
-                className={`console-line ${event.status === "completed" ? "done" : "running"}`}
+                className={`console-line agent-event-line ${statusClass(event.status)}`}
               >
                 <span className="console-marker">
-                  {event.status === "completed" ? <CheckIcon width={12} height={12} /> : <span className="loading-dot" />}
+                  {DONE_STATUSES.has(event.status) ? (
+                    <CheckIcon width={12} height={12} />
+                  ) : ACTIVE_STATUSES.has(event.status) ? (
+                    <span className="loading-dot" />
+                  ) : (
+                    <StepIcon name={event.iconName} width={12} height={12} />
+                  )}
                 </span>
                 <span className="console-step">
-                  {event.status}
-                  <code>{event.tool || event.stage}</code>
+                  <code>{event.title}</code>
+                  {event.detail ? <small>{event.detail}</small> : null}
                 </span>
                 <span className="console-text">{event.message}</span>
+                {event.error ? <span className="console-error">{event.error}</span> : null}
               </div>
             ))
           )}

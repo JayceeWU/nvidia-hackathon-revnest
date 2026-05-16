@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getLatestRunForProperty, startAgentRun } from "@/lib/agentRunStore";
+import { getLatestRunForProperty, getRun, startAgentRun } from "@/lib/agentRunStore";
 
 export const runtime = "nodejs";
 
@@ -38,6 +38,45 @@ function normalizeConversationId(payload) {
   return String(value).trim().replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 160) || undefined;
 }
 
+function normalizeRuntimeMode(value, propertyType) {
+  if (propertyType === "airbnb") return "host-openclaw";
+  const normalized = String(value || "").trim().toLowerCase();
+  const allowed = new Set(["split-demo", "auto", "host-openclaw", "nemoclaw"]);
+  if (allowed.has(normalized)) return normalized;
+  return undefined;
+}
+
+function normalizeHotelScope(value, propertyType) {
+  if (propertyType !== "hotel") return undefined;
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "all-room-types") return "all-room-types";
+  return "room-type";
+}
+
+async function getHotelRoomTypeProperties(accountId) {
+  const result = await query(
+    `
+      SELECT id, data
+      FROM property
+      WHERE account_id = $1::uuid
+        AND data->>'propertyType' = 'Hotel Room Type'
+      ORDER BY id
+    `,
+    [accountId],
+  );
+  return result.rows;
+}
+
+function runningRunForProperties(properties) {
+  for (const row of properties) {
+    const runId = row.data?.activeAgentRunId;
+    if (!runId) continue;
+    const run = getRun(runId);
+    if (run.status === "running") return run;
+  }
+  return null;
+}
+
 export async function GET(request) {
   const propertyId = request.nextUrl.searchParams.get("propertyId");
 
@@ -61,12 +100,17 @@ export async function POST(request) {
   const pricingHorizon = optionalPositiveInteger(payload.pricingHorizon, "pricingHorizon");
   const myPlace = normalizeMyPlace(payload);
   const conversationId = normalizeConversationId(payload);
+  const runtimeMode = normalizeRuntimeMode(payload.runtimeMode ?? payload.runtime_mode, propertyType);
+  const hotelScope = normalizeHotelScope(payload.hotelScope ?? payload.hotel_scope, propertyType);
 
   if (!payload.accountId) {
     return NextResponse.json({ error: "accountId is required" }, { status: 400 });
   }
   if (!propertyType) {
     return NextResponse.json({ error: "propertyType must be airbnb or hotel" }, { status: 400 });
+  }
+  if ((payload.hotelScope || payload.hotel_scope) && propertyType !== "hotel") {
+    return NextResponse.json({ error: "hotelScope is only valid for hotel runs" }, { status: 400 });
   }
   for (const parsed of [minPrice, maxPrice, pricingHorizon]) {
     if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
@@ -76,18 +120,56 @@ export async function POST(request) {
   }
 
   try {
+    let batchPropertyIds = [];
+    if (hotelScope === "all-room-types") {
+      const roomTypeProperties = await getHotelRoomTypeProperties(payload.accountId);
+      if (roomTypeProperties.length === 0) {
+        return NextResponse.json({ error: "No hotel room type properties were found for this account" }, { status: 400 });
+      }
+      const runningRun = runningRunForProperties(roomTypeProperties);
+      if (runningRun) {
+        return NextResponse.json({ error: "A Revy run is already active for this hotel account", run: runningRun }, { status: 409 });
+      }
+      batchPropertyIds = roomTypeProperties.map((row) => row.id);
+    }
+
     const run = startAgentRun({
       accountId: payload.accountId,
       propertyId: payload.propertyId || undefined,
+      propertyIds: batchPropertyIds,
       propertyType,
+      hotelScope,
       minPrice: minPrice.value,
       maxPrice: maxPrice.value,
       pricingHorizon: pricingHorizon.value,
       myPlace,
       supplementalInfo: payload.supplementalInfo,
       conversationId,
+      runtimeMode,
     });
-    if (payload.propertyId) {
+    if (hotelScope === "all-room-types") {
+      await query(
+        `
+          UPDATE property
+          SET data = data || $3::jsonb,
+              updated_at = now()
+          WHERE account_id = $1::uuid
+            AND id = ANY($2::text[])
+        `,
+        [
+          payload.accountId,
+          batchPropertyIds,
+          JSON.stringify({
+            activeAgentRunId: run.runId,
+            activeRevyConversationId: run.conversationId,
+            agentRunStatus: "running",
+            agentRunStartedAt: run.startedAt,
+            agentRunRuntimeMode: run.runtimeMode,
+            agentRunHotelScope: run.hotelScope,
+          }),
+        ],
+      );
+    } else if (payload.propertyId) {
       await query(
         `
           UPDATE property
@@ -105,6 +187,8 @@ export async function POST(request) {
             activeRevyConversationId: run.conversationId,
             agentRunStatus: "running",
             agentRunStartedAt: run.startedAt,
+            agentRunRuntimeMode: run.runtimeMode,
+            ...(run.hotelScope ? { agentRunHotelScope: run.hotelScope } : {}),
             ...(myPlace ? { myPlace } : {}),
           }),
           myPlace || null,

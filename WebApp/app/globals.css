@@ -1081,32 +1081,7 @@ button {
 
 .pending-task-topline {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 10px;
-}
-
-.task-classification {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.task-classification.required {
-  border-color: rgba(176, 72, 43, 0.28);
-  color: #9b3d23;
-  background: #fff0e8;
-}
-
-.task-classification.recommended {
-  border-color: rgba(28, 91, 67, 0.2);
-  color: var(--forest-dark);
-  background: #eef4f0;
 }
 
 .price-log-times {
@@ -1148,47 +1123,13 @@ button {
   min-width: 190px;
 }
 
-.task-actions em,
 .price-log-change em {
   font-style: normal;
   font-weight: 900;
 }
 
-.task-actions .task-approval {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 30px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0 12px;
-  font-size: 12px;
-  text-align: center;
-  text-transform: uppercase;
-}
-
-.task-actions .task-approval.required {
-  border-color: rgba(176, 72, 43, 0.28);
-  color: #9b3d23;
-  background: #fff0e8;
-}
-
-.task-actions .task-approval.recommended {
-  border-color: rgba(28, 91, 67, 0.2);
-  color: var(--forest-dark);
-  background: #eef4f0;
-}
-
 .task-actions b {
   font-size: 18px;
-}
-
-.task-actions .increase {
-  color: var(--forest);
-}
-
-.task-actions .decrease {
-  color: var(--coral);
 }
 
 .approval-reason-card {
@@ -3508,6 +3449,52 @@ button {
   font-style: italic;
 }
 
+.agent-work-strip {
+  position: sticky;
+  top: -18px;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: -18px -18px 14px;
+  border-bottom: 1px solid rgba(231, 243, 236, 0.1);
+  padding: 12px 18px;
+  color: rgba(231, 243, 236, 0.74);
+  background: rgba(15, 23, 22, 0.96);
+  backdrop-filter: blur(8px);
+}
+
+.agent-work-strip strong,
+.agent-work-strip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-work-strip strong {
+  color: #e7f3ec;
+  font-weight: 900;
+}
+
+.agent-work-strip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-work-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7c8f86;
+}
+
+.agent-work-dot.running {
+  background: var(--gold);
+  box-shadow: 0 0 0 0 rgba(214, 168, 79, 0.55);
+  animation: pulse-dot 1.1s ease-out infinite;
+}
+
 .console-line {
   display: grid;
   grid-template-columns: 18px auto 1fr;
@@ -3515,6 +3502,12 @@ button {
   gap: 10px;
   padding: 4px 0;
   animation: console-fade-in 220ms ease-out;
+}
+
+.agent-event-line {
+  grid-template-columns: 18px minmax(150px, 240px) minmax(0, 1fr);
+  border-left: 2px solid rgba(231, 243, 236, 0.12);
+  padding-left: 10px;
 }
 
 .console-line.done {
@@ -3536,15 +3529,39 @@ button {
   color: rgba(231, 243, 236, 0.85);
 }
 
+.console-step small {
+  display: block;
+  margin-top: 1px;
+  color: rgba(231, 243, 236, 0.48);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .console-step code {
-  margin-left: 6px;
   color: #c5b4ff;
   font-family: inherit;
   font-weight: 700;
 }
 
+.console-line:not(.agent-event-line) .console-step code {
+  margin-left: 6px;
+}
+
 .console-text {
   color: inherit;
+}
+
+.console-error {
+  grid-column: 3;
+  color: #fecaca;
+}
+
+.console-line.failed {
+  color: #fecaca;
+}
+
+.console-line.neutral {
+  color: rgba(231, 243, 236, 0.7);
 }
 
 .console-finale {
@@ -4190,6 +4207,7 @@ button {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 18px;
 }
 
@@ -4197,6 +4215,21 @@ button {
   margin: 0;
   font-size: 19px;
   line-height: 1.2;
+}
+
+.hotel-run-revy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hotel-run-revy-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hotel-run-revy-button:hover:disabled {
+  background: var(--forest);
 }
 
 .hotel-list-panel {
@@ -4207,17 +4240,34 @@ button {
 }
 
 .hotel-panel-heading {
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto;
+  align-items: start;
+  column-gap: 18px;
 }
 
-.hotel-panel-heading > div:first-child {
+.hotel-panel-title {
   display: grid;
+  grid-template-rows: 23px 28px;
+  align-items: start;
   gap: 8px;
 }
 
+.hotel-panel-title h2 {
+  line-height: 23px;
+}
+
+.hotel-panel-title .pill {
+  justify-self: start;
+}
+
 .hotel-panel-heading .panel-actions {
+  display: flex;
+  align-items: flex-start;
   flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 10px;
+  min-height: 38px;
 }
 
 .revy-page {
@@ -4266,6 +4316,32 @@ button {
 
 .compact-revy-chat-panel .chat-input-row {
   border-top: 0;
+}
+
+.queued-steer-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  color: #334155;
+  background: #fff7e0;
+}
+
+.queued-steer-note strong {
+  color: #8a5a00;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.queued-steer-note span {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-input-row .stop-thinking-button {
@@ -4488,14 +4564,6 @@ button {
   line-height: 1.45;
 }
 
-.revy-status-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
-.revy-status-strip article,
 .revy-debug-stat,
 .revy-price-calendar-row,
 .revy-trace-event {
@@ -4505,13 +4573,6 @@ button {
   background: #fbfdfb;
 }
 
-.revy-status-strip article {
-  display: grid;
-  gap: 5px;
-  padding: 12px;
-}
-
-.revy-status-strip span,
 .revy-debug-stat span,
 .revy-price-calendar-row span,
 .revy-trace-event small,
@@ -4521,7 +4582,6 @@ button {
   font-size: 12px;
 }
 
-.revy-status-strip strong,
 .revy-debug-stat strong,
 .revy-price-calendar-row strong {
   min-width: 0;
@@ -4691,13 +4751,12 @@ button {
 @media (max-width: 900px) {
   .revy-history-layout,
   .price-point-summary,
-  .revy-status-strip,
   .revy-debug-stats {
     grid-template-columns: 1fr;
   }
 
   .hotel-panel-heading {
-    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .hotel-panel-heading .panel-actions {

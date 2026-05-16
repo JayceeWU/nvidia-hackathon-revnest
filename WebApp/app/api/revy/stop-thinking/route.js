@@ -45,12 +45,20 @@ export async function POST(request) {
       await query(
         `
           UPDATE property
-          SET data = data - 'activeAgentRunId' - 'agentRunStartedAt' || $3::jsonb,
+          SET data = data - 'activeAgentRunId' - 'agentRunStartedAt' - 'agentRunHotelScope' || $3::jsonb,
               updated_at = now()
-          WHERE id = $1
-            AND account_id = $2::uuid
+          WHERE account_id = $1::uuid
+            AND data->>'activeAgentRunId' = $2
         `,
-        [running.propertyId, accountId, JSON.stringify({ agentRunStatus: "stopped" })],
+        [
+          accountId,
+          running.runId,
+          JSON.stringify({
+            agentRunStatus: "stopped",
+            lastAgentRunId: running.runId,
+            agentRunFinishedAt: new Date().toISOString(),
+          }),
+        ],
       );
     }
 

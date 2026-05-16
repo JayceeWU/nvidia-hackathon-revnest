@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -13,9 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
 HOTEL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000103"
+DATA_SQL_PATH = ROOT / "data" / "sql" / "data.sql"
 
 
-def run_psql(database_url: str, sql: str) -> list[dict]:
+def run_psql(database_url: str, sql: str):
     result = subprocess.run(
         ["psql", database_url, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c", sql],
         cwd=ROOT,
@@ -27,6 +29,12 @@ def run_psql(database_url: str, sql: str) -> list[dict]:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psql failed")
     text = result.stdout.strip()
     return json.loads(text or "[]")
+
+
+def seed_pricing_record_count(record_type: str) -> int:
+    text = DATA_SQL_PATH.read_text(encoding="utf-8")
+    pattern = rf"^\s*'{re.escape(record_type)}',\s*$"
+    return len(re.findall(pattern, text, flags=re.MULTILINE))
 
 
 def main() -> int:
@@ -79,17 +87,36 @@ FROM (
 ) checks;
 """
     rows = run_psql(args.database_url, sql)
+    count_sql = f"""
+SELECT json_build_object(
+  'pending_task_count', COUNT(*) FILTER (
+    WHERE record_type = 'pending_task'
+      AND data->>'source' = 'mockhotel_price_review'
+  ),
+  'price_log_count', COUNT(*) FILTER (WHERE record_type = 'price_log')
+)::text
+FROM pricing_record
+WHERE account_id = '{args.account_id}'::uuid;
+"""
+    counts = run_psql(args.database_url, count_sql)
+    expected_pending_task_count = seed_pricing_record_count("pending_task")
+    expected_price_log_count = seed_pricing_record_count("price_log")
     failures = [row for row in rows if row.get("status") != "ok"]
     output = {
         "source": "hotel_seed_consistency",
         "account_id": args.account_id,
         "pending_task_count": len(rows),
+        "expected_pending_task_count": expected_pending_task_count,
+        "price_log_count": int(counts.get("price_log_count") or 0),
+        "expected_price_log_count": expected_price_log_count,
         "failed_count": len(failures),
         "rows": rows,
     }
     print(json.dumps(output, indent=2, ensure_ascii=False, sort_keys=True))
-    if len(rows) != 3:
-        raise SystemExit("Expected exactly 3 seeded MockHotel pending tasks")
+    if len(rows) != expected_pending_task_count:
+        raise SystemExit(f"Expected {expected_pending_task_count} seeded MockHotel pending tasks")
+    if output["price_log_count"] != expected_price_log_count:
+        raise SystemExit(f"Expected {expected_price_log_count} seeded MockHotel price logs")
     if failures:
         raise SystemExit("Hotel seed pending tasks do not match property_price")
     return 0
