@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 RevNest. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+preset:
+  name: revnest-airbnb-browser
+  description: "RevNest Airbnb pricing workflow: allow OpenClaw browser to read Airbnb listing pages and Airbnb static assets"
+
+network_policies:
+  revnest_airbnb_browser:
+    name: revnest_airbnb_browser
+    endpoints:
+      - host: airbnb.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+          - allow: { method: OPTIONS, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+      - host: www.airbnb.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+          - allow: { method: OPTIONS, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+      - host: "*.airbnb.com"
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+          - allow: { method: OPTIONS, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+      - host: a0.muscache.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+          - allow: { method: OPTIONS, path: "/**" }
+      - host: "*.muscache.com"
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+          - allow: { method: OPTIONS, path: "/**" }
+      - host: ws.airbnb.com
+        port: 443
+        protocol: websocket
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: WEBSOCKET_TEXT, path: "/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/node }
+      - { path: /usr/local/bin/openclaw }
+      - { path: /tmp/npm-global/bin/openclaw }
+      - { path: /usr/bin/chromium }
+      - { path: /usr/lib/chromium/chromium }

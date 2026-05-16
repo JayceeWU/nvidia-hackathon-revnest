@@ -52,7 +52,8 @@ TOOL_NAMES = [
 
 HOTEL_DEVIATION_ABSOLUTE_THRESHOLD = 25.0
 HOTEL_DEVIATION_PERCENT_THRESHOLD = 0.15
-MOCKHOTEL_DEFAULT_API_BASE_URL = "http://localhost:3001"
+MOCKHOTEL_HOST_API_BASE_URL = "http://localhost:3001"
+MOCKHOTEL_SANDBOX_API_BASE_URL = "http://host.openshell.internal:3001"
 
 SENSITIVE_KEY_PARTS = (
     "password",
@@ -81,12 +82,34 @@ PROFILE_COLUMN_KEYS = {
     "other_info": "otherInfo",
 }
 
+AIRBNB_PROFILE_JSON_KEYS = {
+    "name": ("name", "propertyName", "property_name"),
+    "listingTitle": ("listingTitle", "listing_title", "title", "propertyTitle", "property_title"),
+    "listingType": ("listingType", "listing_type"),
+    "roomType": ("roomType", "room_type"),
+    "spaceType": ("spaceType", "space_type"),
+    "neighborhood": ("neighborhood",),
+    "location": ("location", "market", "address"),
+    "myPlace": ("myPlace", "my_place"),
+    "airbnbUrl": ("airbnbUrl", "airbnb_url"),
+}
+
 
 def local_env(database_url: str | None = None) -> dict[str, str]:
     env = run_pricing_agent.load_dotenv(os.environ)
     if database_url:
         env["CLAW_DATABASE_URL"] = database_url
     return env
+
+
+def running_in_openshell_sandbox() -> bool:
+    return Path("/sandbox").exists() or os.environ.get("OPENSHELL_GATEWAY") == "nemoclaw"
+
+
+def default_mockhotel_api_base_url() -> str:
+    if running_in_openshell_sandbox():
+        return MOCKHOTEL_SANDBOX_API_BASE_URL
+    return MOCKHOTEL_HOST_API_BASE_URL
 
 
 def sanitize_payload(value: Any) -> Any:
@@ -662,6 +685,13 @@ def price_from_calendar_row(row: dict[str, Any]) -> float:
     raise ValueError("calendar row is missing a final suggested price")
 
 
+def optional_price_from_calendar_row(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return parse_money_amount(row[key], key)
+    return None
+
+
 def date_from_calendar_row(row: dict[str, Any]) -> str:
     for key in ("date", "price_date", "priceDate", "stay_date", "stayDate"):
         if row.get(key):
@@ -686,6 +716,148 @@ def infer_calendar_date_range(
     if end < start:
         raise ValueError("end_date must be on or after start_date")
     return start, end
+
+
+def bool_from_calendar_row(row: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1"}:
+                return True
+            if normalized in {"false", "no", "0", ""}:
+                return False
+        if value:
+            return True
+    return False
+
+
+def list_from_calendar_row(row: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = to_optional_text(value)
+        if text:
+            return [text]
+    return []
+
+
+def classify_hotel_pending_task(
+    row: dict[str, Any],
+    current_price: float,
+    suggested_price: float,
+    absolute_diff: float,
+    percent_diff: float | None,
+    absolute_threshold: float,
+    percent_threshold: float,
+) -> dict[str, Any]:
+    range_low = optional_price_from_calendar_row(
+        row,
+        (
+            "suggested_price_range_low",
+            "suggestedPriceRangeLow",
+            "price_range_low",
+            "priceRangeLow",
+        ),
+    )
+    range_high = optional_price_from_calendar_row(
+        row,
+        (
+            "suggested_price_range_high",
+            "suggestedPriceRangeHigh",
+            "price_range_high",
+            "priceRangeHigh",
+        ),
+    )
+    if range_low is not None and range_high is not None and range_low > range_high:
+        range_low, range_high = range_high, range_low
+
+    current_position = "unavailable"
+    outside_strategy_range = False
+    if range_low is not None and current_price < range_low:
+        current_position = "below_range"
+        outside_strategy_range = True
+    elif range_high is not None and current_price > range_high:
+        current_position = "above_range"
+        outside_strategy_range = True
+    elif range_low is not None or range_high is not None:
+        current_position = "within_range"
+
+    material_difference = (
+        percent_diff is not None
+        and absolute_diff >= absolute_threshold
+        and percent_diff >= percent_threshold
+    )
+    confidence = str(row.get("confidence") or "").strip().lower()
+    confidence_low = confidence in {"low", "weak", "very_low", "very low"}
+    guardrail_warning = to_optional_text(row.get("guardrail_warning") or row.get("guardrailWarning"))
+    guardrail_adjustments = list_from_calendar_row(row, ("guardrail_adjustments", "guardrailAdjustments"))
+    guardrail_issue = bool_from_calendar_row(row, ("guardrail_review_needed", "guardrailReviewNeeded")) or bool(
+        guardrail_warning or guardrail_adjustments
+    )
+
+    drivers: list[str] = []
+    if outside_strategy_range:
+        if current_position == "below_range":
+            drivers.append("current MockHotel price is below Revy's strategy range")
+        elif current_position == "above_range":
+            drivers.append("current MockHotel price is above Revy's strategy range")
+    if material_difference:
+        drivers.append(
+            f"final recommendation differs by {format_usd(absolute_diff)} and "
+            f"{format_signed_percent(percent_diff)}"
+        )
+    if confidence_low:
+        drivers.append(f"calculator confidence is {confidence}")
+    if guardrail_issue:
+        drivers.append(guardrail_warning or "guardrail review is needed")
+
+    classification = None
+    if outside_strategy_range:
+        classification = "price_adjustment_required"
+    elif material_difference or confidence_low or guardrail_issue:
+        classification = "price_review_recommended"
+
+    label = {
+        "price_adjustment_required": "Price adjustment required",
+        "price_review_recommended": "Price review recommended",
+    }.get(classification)
+    description = {
+        "price_adjustment_required": (
+            "Current MockHotel PMS price is outside Revy's strategy range. "
+            "A human must approve before any live PMS sync."
+        ),
+        "price_review_recommended": (
+            "Current MockHotel PMS price is still inside Revy's strategy range, "
+            "but Revy found a material delta, low confidence, or guardrail issue. "
+            "Human review is recommended before PMS sync."
+        ),
+    }.get(classification)
+    approval_gate_label = {
+        "price_adjustment_required": "Approval required",
+        "price_review_recommended": "Review recommended",
+    }.get(classification)
+
+    return {
+        "classification": classification,
+        "classificationLabel": label,
+        "classificationDescription": description,
+        "approvalGateLabel": approval_gate_label,
+        "should_review": classification is not None,
+        "outside_strategy_range": outside_strategy_range,
+        "material_difference": material_difference,
+        "confidence_low": confidence_low,
+        "guardrail_issue": guardrail_issue,
+        "reviewDrivers": drivers,
+        "strategyRange": {
+            "low": range_low,
+            "high": range_high,
+            "currentPosition": current_position,
+        },
+    }
 
 
 def room_type_properties_by_id(room_type_properties: Any) -> dict[str, dict[str, Any]]:
@@ -762,7 +934,11 @@ def fetch_mock_hotel_current_prices(
     token = os.environ.get("MOCKHOTEL_AGENT_TOKEN")
     if not token:
         raise ValueError("MOCKHOTEL_AGENT_TOKEN is required to fetch MockHotel current prices")
-    base_url = os.environ.get("MOCKHOTEL_API_BASE_URL", MOCKHOTEL_DEFAULT_API_BASE_URL).rstrip("/")
+    base_url = (
+        os.environ.get("MOCKHOTEL_API_BASE_URL")
+        or os.environ.get("REVNEST_MOCKHOTEL_API_BASE_URL")
+        or default_mockhotel_api_base_url()
+    ).rstrip("/")
     params = {
         "start": start_date,
         "end": end_date,
@@ -822,10 +998,14 @@ def build_hotel_price_adjustment_tasks(
             absolute_diff = round(abs(diff), 2)
             percent_diff = abs(diff) / current_price if current_price > 0 else None
             signed_percent = diff / current_price if current_price > 0 else None
-            should_review = (
-                percent_diff is not None
-                and absolute_diff >= absolute_threshold
-                and percent_diff >= percent_threshold
+            review_classification = classify_hotel_pending_task(
+                row,
+                current_price,
+                suggested_price,
+                absolute_diff,
+                percent_diff,
+                absolute_threshold,
+                percent_threshold,
             )
             comparison = {
                 "property_id": property_id,
@@ -835,17 +1015,24 @@ def build_hotel_price_adjustment_tasks(
                 "suggested_price": suggested_price,
                 "deviation_abs": absolute_diff,
                 "deviation_pct": percent_diff,
-                "should_review": should_review,
+                "strategy_range": review_classification["strategyRange"],
+                "classification": review_classification["classification"],
+                "classification_label": review_classification["classificationLabel"],
+                "review_drivers": review_classification["reviewDrivers"],
+                "should_review": review_classification["should_review"],
             }
             comparisons.append(comparison)
-            if not should_review:
+            if not review_classification["should_review"]:
                 continue
 
             change_type = "Increase" if diff > 0 else "Decrease"
+            pending_task_type = review_classification["classificationLabel"]
             reason = to_optional_text(row.get("reason") or row.get("summary")) or (
                 "Revy's guarded recommendation differs from MockHotel's current rate after market, "
                 "guardrail, and room-type scarcity review."
             )
+            review_drivers = review_classification["reviewDrivers"]
+            review_reason = "; ".join(review_drivers) if review_drivers else "Revy recommends human review before PMS sync."
             task_id = f"task-hotel-review-{property_id}-{date}"
             tasks.append(
                 {
@@ -854,14 +1041,35 @@ def build_hotel_price_adjustment_tasks(
                     "property_id": property_id,
                     "property": property_name,
                     "priceDate": date,
-                    "type": change_type,
+                    "type": pending_task_type,
+                    "taskType": review_classification["classification"],
+                    "taskTypeLabel": review_classification["classificationLabel"],
+                    "taskTypeDescription": review_classification["classificationDescription"],
+                    "approvalGateLabel": review_classification["approvalGateLabel"],
+                    "priceDirection": change_type,
+                    "changeType": change_type,
                     "currentPrice": format_usd(current_price),
                     "agentSuggestedPrice": format_usd(suggested_price),
                     "change": format_signed_percent(signed_percent),
                     "agentSuggestedAt": suggested_at,
                     "reason": reason,
-                    "action": "Review MockHotel price adjustment",
+                    "reviewReason": review_reason,
+                    "action": review_classification["classificationLabel"],
                     "status": "Needs approval",
+                    "classification": review_classification["classification"],
+                    "classificationLabel": review_classification["classificationLabel"],
+                    "classificationDescription": review_classification["classificationDescription"],
+                    "approvalRequirement": (
+                        "required"
+                        if review_classification["classification"] == "price_adjustment_required"
+                        else "recommended"
+                    ),
+                    "strategyRange": review_classification["strategyRange"],
+                    "reviewDrivers": review_drivers,
+                    "outsideStrategyRange": review_classification["outside_strategy_range"],
+                    "materialDifference": review_classification["material_difference"],
+                    "confidenceLow": review_classification["confidence_low"],
+                    "guardrailIssue": review_classification["guardrail_issue"],
                     "runId": run_id,
                     "accountId": account_id,
                     "threshold": {
@@ -985,8 +1193,9 @@ def send_discord_hotel_review_summary(
         f"Account: {account_id}",
     ]
     for task in largest:
+        label = task.get("classificationLabel") or "Review recommended"
         lines.append(
-            f"- {task['property']} {task['priceDate']}: {task['currentPrice']} -> "
+            f"- {label}: {task['property']} {task['priceDate']}: {task['currentPrice']} -> "
             f"{task['agentSuggestedPrice']} ({task['change']})"
         )
     if len(tasks) > len(largest):
@@ -1121,16 +1330,35 @@ def upsert_airbnb_property_profile_impl(
         json_payload.setdefault("beds", column_values["bed"])
     if "bath" in column_values:
         json_payload.setdefault("bathroom", column_values["bath"])
-    if not column_values:
+    for json_key, keys in AIRBNB_PROFILE_JSON_KEYS.items():
+        value = run_pricing_agent.first_non_empty(*(profile.get(key) for key in keys))
+        text_value = run_pricing_agent.normalize_optional_text(value)
+        if text_value:
+            json_payload[json_key] = text_value
+
+    if json_payload:
+        my_place = run_pricing_agent.normalize_optional_text(
+            run_pricing_agent.first_non_empty(json_payload.get("myPlace"), json_payload.get("airbnbUrl"))
+        )
+        json_payload["name"] = run_pricing_agent.human_readable_airbnb_property_name(
+            property_id,
+            my_place,
+            json_payload,
+            json_payload.get("name"),
+        )
+        json_payload.setdefault("displayNameSource", "airbnb_human_readable")
+
+    if not column_values and not json_payload:
         raise ValueError("profile did not contain any supported property fields")
 
     assignments = [f"{column} = {run_pricing_agent.sql_value(value)}" for column, value in column_values.items()]
-    data_json = json_dumps(sanitize_payload(json_payload))
+    set_parts = assignments + [
+        f"data = data || {run_pricing_agent.sql_literal(json_dumps(sanitize_payload(json_payload)))}::jsonb",
+        "updated_at = now()",
+    ]
     sql = f"""
 UPDATE property
-SET {", ".join(assignments)},
-    data = data || {run_pricing_agent.sql_literal(data_json)}::jsonb,
-    updated_at = now()
+SET {", ".join(set_parts)}
 WHERE account_id = {run_pricing_agent.sql_literal(account_id)}::uuid
   AND id = {run_pricing_agent.sql_literal(property_id)}
 RETURNING json_build_object(

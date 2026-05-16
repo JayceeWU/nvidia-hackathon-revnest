@@ -364,6 +364,121 @@ def normalize_optional_text(value: object | None) -> str | None:
     return text or None
 
 
+def first_non_empty(*values: object) -> object | None:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def airbnb_room_id(value: object | None) -> str | None:
+    text = normalize_optional_text(value)
+    if not text:
+        return None
+    match = re.search(r"/rooms/(\d+)", text, re.I)
+    return match.group(1) if match else None
+
+
+def short_airbnb_room_suffix(room_id: object | None) -> str | None:
+    text = normalize_optional_text(room_id)
+    if not text:
+        return None
+    return text[-4:] if len(text) > 4 else text
+
+
+def clean_airbnb_title(value: object | None) -> str | None:
+    text = normalize_optional_text(value)
+    if not text:
+        return None
+    text = re.sub(r"\s*[|-]\s*Airbnb\s*$", "", text, flags=re.I).strip()
+    parts = [part.strip() for part in re.split(r"\s+(?:-|[|])\s+", text) if part.strip()]
+    if len(parts) > 1 and re.search(r"\b(for rent|vacation rental|airbnb|united states|apartments?|homes?)\b", " ".join(parts[1:]), re.I):
+        text = parts[0]
+    return re.sub(r"^airbnb\s*[:|-]\s*", "", text, flags=re.I).strip() or None
+
+
+def looks_like_placeholder_airbnb_name(value: object | None, property_id: str | None = None, room_id: str | None = None) -> bool:
+    text = normalize_optional_text(value)
+    if not text:
+        return True
+    lower = text.lower()
+    if re.search(r"\b(pending browser verification|pending verification|not specified)\b", lower):
+        return True
+    if property_id and lower == property_id.lower():
+        return True
+    if re.match(r"^airbnb[-\s]+\d{6,}$", text, re.I):
+        return True
+    if re.match(r"^airbnb listing \d{1,6}$", text, re.I):
+        return True
+    if re.match(r"^airbnb stay(?:\s*-\s*listing \d{1,6})?$", text, re.I):
+        return True
+    if room_id and len(room_id) > 6 and room_id in text:
+        return True
+    return False
+
+
+def compact_display_name(parts: list[object | None]) -> str | None:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in parts:
+        text = normalize_optional_text(value)
+        if not text or looks_like_placeholder_airbnb_name(text):
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        output.append(text)
+        seen.add(key)
+    if not output:
+        return None
+    joined = " - ".join(output)
+    return f"{joined[:93].rstrip()}..." if len(joined) > 96 else joined
+
+
+def human_readable_airbnb_property_name(args: argparse.Namespace, payload: dict[str, Any], current_name: object | None = None) -> str:
+    property_id = args.property_id
+    my_place = normalize_optional_text(first_non_empty(payload.get("myPlace"), payload.get("my_place"), payload.get("airbnbUrl")))
+    room_id = airbnb_room_id(my_place) or (property_id.removeprefix("airbnb-") if property_id.startswith("airbnb-") else None)
+    current = normalize_optional_text(current_name or payload.get("name"))
+    if current and not looks_like_placeholder_airbnb_name(current, property_id, room_id):
+        return current
+
+    title = clean_airbnb_title(first_non_empty(payload.get("listingTitle"), payload.get("listing_title"), payload.get("title")))
+    fallback_city, fallback_state = city_state_from_location(args.location)
+    city = normalize_optional_text(first_non_empty(payload.get("city"), fallback_city))
+    state = normalize_optional_text(first_non_empty(payload.get("state"), fallback_state))
+    location = normalize_optional_text(
+        first_non_empty(
+            payload.get("neighborhood"),
+            f"{city}, {state}" if city and state else None,
+            city,
+            payload.get("location"),
+            args.location,
+        )
+    )
+    listing_type = normalize_optional_text(
+        first_non_empty(
+            payload.get("listingType"),
+            payload.get("listing_type"),
+            payload.get("roomType"),
+            payload.get("room_type"),
+            payload.get("spaceType"),
+            payload.get("space_type"),
+            payload.get("propertyCategory"),
+            payload.get("property_category"),
+        )
+    )
+    profile_name = compact_display_name([title, location, listing_type])
+    if profile_name:
+        return profile_name
+    if location or listing_type:
+        fallback = compact_display_name([location, listing_type or "Airbnb Stay", f"Listing {short_airbnb_room_suffix(room_id)}" if room_id else None])
+        if fallback:
+            return fallback
+    suffix = short_airbnb_room_suffix(room_id)
+    return f"Airbnb Listing {suffix}" if suffix else "Airbnb Stay"
+
+
 def optional_non_negative_int(value: object | None) -> int | None:
     if value in (None, ""):
         return None
@@ -477,11 +592,15 @@ def build_property_data(
     min_price = display_price_from_cents(pricing["min_price_cents"])
     max_price = display_price_from_cents(pricing["max_price_cents"])
     payload.setdefault("id", args.property_id)
-    payload.setdefault("name", args.property_name or args.property_id)
     payload.setdefault("propertyType", args.property_type)
     payload.setdefault("roomCount", args.rooms)
     if args.location:
         payload.setdefault("location", args.location)
+    if args.property_type == "airbnb":
+        payload["name"] = human_readable_airbnb_property_name(args, payload, args.property_name)
+        payload.setdefault("displayNameSource", "airbnb_human_readable")
+    else:
+        payload.setdefault("name", args.property_name or args.property_id)
     profile = property_profile_values(args, payload)
     for column, json_key in PROFILE_JSON_KEYS.items():
         if profile[column] is not None:

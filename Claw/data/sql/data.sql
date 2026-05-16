@@ -535,6 +535,17 @@ INSERT INTO property (id, account_id, min_price_cents, max_price_cents, pricing_
       }$$::jsonb
   );
 
+INSERT INTO property_price (property_id, price_date, fixed_price_cents, agent_price_cents) VALUES
+  ('dream-inn-ocean-view-two-queen', '2026-05-17', 46000, 51500),
+  ('dream-inn-ocean-view-two-queen', '2026-05-18', 46000, 50500),
+  ('dream-inn-ocean-view-two-queen', '2026-05-19', 46000, 49800),
+  ('dream-inn-beachfront-suite', '2026-05-17', 92300, 100500),
+  ('dream-inn-beachfront-suite', '2026-05-18', 92300, 104000),
+  ('dream-inn-beachfront-suite', '2026-05-19', 92300, 101500),
+  ('dream-inn-standard-king', '2026-05-17', 32300, 31800),
+  ('dream-inn-standard-king', '2026-05-18', 32300, 31200),
+  ('dream-inn-standard-king', '2026-05-19', 32300, 30500);
+
 INSERT INTO pricing_record (id, account_id, record_type, data) VALUES
   (
     'task-dream-inn-001',
@@ -542,16 +553,42 @@ INSERT INTO pricing_record (id, account_id, record_type, data) VALUES
     'pending_task',
     $${
       "id": "task-dream-inn-001",
+      "source": "mockhotel_price_review",
+      "propertyId": "dream-inn-ocean-view-two-queen",
+      "property_id": "dream-inn-ocean-view-two-queen",
       "property": "Ocean View Two Queen",
-      "priceDate": "May 17, 2026",
-      "type": "Increase",
+      "priceDate": "2026-05-17",
+      "type": "Price adjustment required",
+      "taskType": "price_adjustment_required",
+      "taskTypeLabel": "Price adjustment required",
+      "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+      "approvalGateLabel": "Approval required",
+      "priceDirection": "Increase",
+      "changeType": "Increase",
       "currentPrice": "$460",
       "agentSuggestedPrice": "$515",
+      "revySuggestedPrice": 515,
+      "mockHotelCurrentPrice": 460,
+      "deviationAbs": 55,
+      "deviationPct": 0.1196,
       "change": "+12%",
       "agentSuggestedAt": "May 9, 2026 12:39 PM",
       "reason": "Dream Inn RMS history shows strong four-guest ocean-view demand, so Revy recommends a guarded short-horizon lift.",
-      "action": "Review 3-day guardrail update",
-      "status": "Needs approval"
+      "reviewReason": "current MockHotel price is below Revy's strategy range; final recommendation differs by $55 and +12%",
+      "action": "Price adjustment required",
+      "status": "Needs approval",
+      "classification": "price_adjustment_required",
+      "classificationLabel": "Price adjustment required",
+      "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+      "approvalRequirement": "required",
+      "strategyRange": {"low": 500, "high": 560, "currentPosition": "below_range"},
+      "reviewDrivers": ["current MockHotel price is below Revy's strategy range", "final recommendation differs by $55 and +12%"],
+      "outsideStrategyRange": true,
+      "materialDifference": true,
+      "confidenceLow": false,
+      "guardrailIssue": false,
+      "runId": "seed-hotel-safe-pms-demo",
+      "currency": "USD"
     }$$::jsonb
   ),
   (
@@ -560,16 +597,42 @@ INSERT INTO pricing_record (id, account_id, record_type, data) VALUES
     'pending_task',
     $${
       "id": "task-dream-inn-002",
+      "source": "mockhotel_price_review",
+      "propertyId": "dream-inn-beachfront-suite",
+      "property_id": "dream-inn-beachfront-suite",
       "property": "Beachfront Suite",
-      "priceDate": "May 18, 2026",
-      "type": "Increase",
+      "priceDate": "2026-05-18",
+      "type": "Price adjustment required",
+      "taskType": "price_adjustment_required",
+      "taskTypeLabel": "Price adjustment required",
+      "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+      "approvalGateLabel": "Approval required",
+      "priceDirection": "Increase",
+      "changeType": "Increase",
       "currentPrice": "$923",
       "agentSuggestedPrice": "$1040",
+      "revySuggestedPrice": 1040,
+      "mockHotelCurrentPrice": 923,
+      "deviationAbs": 117,
+      "deviationPct": 0.1268,
       "change": "+13%",
       "agentSuggestedAt": "May 9, 2026 12:52 PM",
       "reason": "The suite inventory is limited and historical beachfront suite rates support a higher protected ceiling.",
-      "action": "Accept guarded rate",
-      "status": "Needs approval"
+      "reviewReason": "current MockHotel price is below Revy's strategy range; final recommendation differs by $117 and +13%",
+      "action": "Price adjustment required",
+      "status": "Needs approval",
+      "classification": "price_adjustment_required",
+      "classificationLabel": "Price adjustment required",
+      "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+      "approvalRequirement": "required",
+      "strategyRange": {"low": 980, "high": 1120, "currentPosition": "below_range"},
+      "reviewDrivers": ["current MockHotel price is below Revy's strategy range", "final recommendation differs by $117 and +13%"],
+      "outsideStrategyRange": true,
+      "materialDifference": true,
+      "confidenceLow": false,
+      "guardrailIssue": false,
+      "runId": "seed-hotel-safe-pms-demo",
+      "currency": "USD"
     }$$::jsonb
   ),
   (
@@ -578,16 +641,42 @@ INSERT INTO pricing_record (id, account_id, record_type, data) VALUES
     'pending_task',
     $${
       "id": "task-dream-inn-003",
+      "source": "mockhotel_price_review",
+      "propertyId": "dream-inn-standard-king",
+      "property_id": "dream-inn-standard-king",
       "property": "Standard King",
-      "priceDate": "May 19, 2026",
-      "type": "Decrease",
+      "priceDate": "2026-05-19",
+      "type": "Price adjustment required",
+      "taskType": "price_adjustment_required",
+      "taskTypeLabel": "Price adjustment required",
+      "taskTypeDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+      "approvalGateLabel": "Approval required",
+      "priceDirection": "Decrease",
+      "changeType": "Decrease",
       "currentPrice": "$323",
       "agentSuggestedPrice": "$305",
+      "revySuggestedPrice": 305,
+      "mockHotelCurrentPrice": 323,
+      "deviationAbs": 18,
+      "deviationPct": 0.0557,
       "change": "-6%",
       "agentSuggestedAt": "May 9, 2026 1:06 PM",
       "reason": "Standard King has the broadest guardrail headroom and can use a small weekday discount without crossing the saved floor.",
-      "action": "Review discount",
-      "status": "Waiting"
+      "reviewReason": "current MockHotel price is above Revy's strategy range; final recommendation differs by $18 and -6%",
+      "action": "Price adjustment required",
+      "status": "Needs approval",
+      "classification": "price_adjustment_required",
+      "classificationLabel": "Price adjustment required",
+      "classificationDescription": "Current MockHotel PMS price is outside Revy's strategy range. A human must approve before any live PMS sync.",
+      "approvalRequirement": "required",
+      "strategyRange": {"low": 280, "high": 315, "currentPosition": "above_range"},
+      "reviewDrivers": ["current MockHotel price is above Revy's strategy range", "final recommendation differs by $18 and -6%"],
+      "outsideStrategyRange": true,
+      "materialDifference": false,
+      "confidenceLow": false,
+      "guardrailIssue": false,
+      "runId": "seed-hotel-safe-pms-demo",
+      "currency": "USD"
     }$$::jsonb
   ),
   (
@@ -664,6 +753,7 @@ INSERT INTO hotel_home_dashboard (id, account_id, data) VALUES
           "trend": "neutral",
           "impactTrend": "flat",
           "footnote": "No major impact",
+          "collectedAt": "2026-05-15T19:16:00.000Z",
           "days": [
             {"day": "Fri", "high": 67, "conditions": "partly cloudy"},
             {"day": "Sat", "high": 69, "conditions": "sunny"},
@@ -676,6 +766,7 @@ INSERT INTO hotel_home_dashboard (id, account_id, data) VALUES
           "headline": "Increasing Demand",
           "trend": "up",
           "footnote": "Pushes price up",
+          "collectedAt": "2026-05-15T19:16:20.000Z",
           "next": []
         },
         "competitor": {
@@ -683,15 +774,27 @@ INSERT INTO hotel_home_dashboard (id, account_id, data) VALUES
           "median_rate": 238,
           "delta_pct": 3,
           "sample_size": 5,
-          "trend": "up"
+          "trend": "up",
+          "collectedAt": "2026-05-15T19:16:40.000Z"
         },
         "occupancy": {
           "portfolio_rate": 0.81,
           "delta_vs_last_month_pct": 4,
           "booked_room_nights": 84,
           "available_room_nights": 104,
-          "trend": "up"
+          "trend": "up",
+          "collectedAt": "2026-05-15T19:17:00.000Z"
         }
+      },
+      "marketDataRun": {
+        "runId": "seed-market-signals",
+        "propertyId": "hotel-home",
+        "propertyType": "hotel",
+        "startDate": "2026-05-16",
+        "endDate": "2026-05-18",
+        "pricingHorizon": 3,
+        "collectedAt": "2026-05-15T19:17:00.000Z",
+        "updatedAt": "2026-05-15T19:17:00.000Z"
       }
     }$$::jsonb
   );

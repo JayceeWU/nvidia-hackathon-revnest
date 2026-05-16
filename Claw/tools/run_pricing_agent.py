@@ -32,8 +32,9 @@ import progress_logger
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_PATH = ROOT / "runs" / "airbnb-pricing-progress.log"
-DEFAULT_NEMOCLAW_SANDBOX = "revnest"
+DEFAULT_NEMOCLAW_SANDBOX = "my-assistant"
 DEFAULT_NEMOCLAW_WORKDIR = "/sandbox/RevNest/Claw"
+DEFAULT_RUNTIME_MODE = "split-demo"
 WORKFLOW_NAME = "pricing-workflow"
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
 
@@ -554,6 +555,124 @@ def first_non_empty(*values: object) -> object | None:
     return None
 
 
+def airbnb_room_id(value: object | None) -> str | None:
+    text = normalize_optional_text(value)
+    if not text:
+        return None
+    match = re.search(r"/rooms/(\d+)", text, re.I)
+    return match.group(1) if match else None
+
+
+def short_airbnb_room_suffix(room_id: object | None) -> str | None:
+    text = normalize_optional_text(room_id)
+    if not text:
+        return None
+    return text[-4:] if len(text) > 4 else text
+
+
+def clean_airbnb_title(value: object | None) -> str | None:
+    text = normalize_optional_text(value)
+    if not text:
+        return None
+    text = re.sub(r"\s*[|-]\s*Airbnb\s*$", "", text, flags=re.I).strip()
+    parts = [part.strip() for part in re.split(r"\s+(?:-|[|])\s+", text) if part.strip()]
+    if len(parts) > 1 and re.search(r"\b(for rent|vacation rental|airbnb|united states|apartments?|homes?)\b", " ".join(parts[1:]), re.I):
+        text = parts[0]
+    return re.sub(r"^airbnb\s*[:|-]\s*", "", text, flags=re.I).strip() or None
+
+
+def looks_like_placeholder_airbnb_name(value: object | None, property_id: str | None = None, room_id: str | None = None) -> bool:
+    text = normalize_optional_text(value)
+    if not text:
+        return True
+    lower = text.lower()
+    if re.search(r"\b(pending browser verification|pending verification|not specified)\b", lower):
+        return True
+    if property_id and lower == property_id.lower():
+        return True
+    if re.match(r"^airbnb[-\s]+\d{6,}$", text, re.I):
+        return True
+    if re.match(r"^airbnb listing \d{1,6}$", text, re.I):
+        return True
+    if re.match(r"^airbnb stay(?:\s*-\s*listing \d{1,6})?$", text, re.I):
+        return True
+    if room_id and len(room_id) > 6 and room_id in text:
+        return True
+    return False
+
+
+def compact_display_name(parts: list[object | None]) -> str | None:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in parts:
+        text = normalize_optional_text(value)
+        if not text or looks_like_placeholder_airbnb_name(text):
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        output.append(text)
+        seen.add(key)
+    if not output:
+        return None
+    joined = " - ".join(output)
+    return f"{joined[:93].rstrip()}..." if len(joined) > 96 else joined
+
+
+def human_readable_airbnb_property_name(
+    property_id: str | None,
+    my_place: str | None,
+    data: dict | None,
+    current_name: object | None = None,
+) -> str:
+    data = data or {}
+    room_id = (
+        airbnb_room_id(my_place)
+        or airbnb_room_id(value_from_data(data, ("airbnbUrl", "myPlace", "my_place")))
+        or (property_id.removeprefix("airbnb-") if property_id and property_id.startswith("airbnb-") else None)
+    )
+    current = normalize_optional_text(current_name or value_from_data(data, ("name", "propertyName", "property_name")))
+    if current and not looks_like_placeholder_airbnb_name(current, property_id, room_id):
+        return current
+
+    title = clean_airbnb_title(value_from_data(data, ("listingTitle", "listing_title", "title", "propertyTitle", "property_title")))
+    city = normalize_optional_text(value_from_data(data, ("city",)))
+    state = normalize_optional_text(value_from_data(data, ("state", "stateCode", "state_code")))
+    location = normalize_optional_text(
+        first_non_empty(
+            value_from_data(data, ("neighborhood",)),
+            f"{city}, {state}" if city and state else None,
+            city,
+            value_from_data(data, ("location", "market", "address")),
+        )
+    )
+    listing_type = normalize_optional_text(
+        value_from_data(
+            data,
+            (
+                "listingType",
+                "listing_type",
+                "roomType",
+                "room_type",
+                "spaceType",
+                "space_type",
+                "propertyCategory",
+                "property_category",
+            ),
+        )
+    )
+
+    profile_name = compact_display_name([title, location, listing_type])
+    if profile_name:
+        return profile_name
+    if location or listing_type:
+        fallback = compact_display_name([location, listing_type or "Airbnb Stay", f"Listing {short_airbnb_room_suffix(room_id)}" if room_id else None])
+        if fallback:
+            return fallback
+    suffix = short_airbnb_room_suffix(room_id)
+    return f"Airbnb Listing {suffix}" if suffix else "Airbnb Stay"
+
+
 def row_data(row: dict) -> dict:
     data = row.get("data")
     return data if isinstance(data, dict) else {}
@@ -731,6 +850,14 @@ def build_property_json(args: argparse.Namespace, existing: dict | None) -> dict
     if args.my_place:
         payload["myPlace"] = args.my_place
         payload.setdefault("airbnbUrl", args.my_place)
+    if args.property_type == "airbnb":
+        payload["name"] = human_readable_airbnb_property_name(
+            args.property_id,
+            args.my_place,
+            payload,
+            payload.get("name"),
+        )
+        payload.setdefault("displayNameSource", "airbnb_human_readable")
     return payload
 
 
@@ -947,6 +1074,43 @@ def run_setup_command(cmd: list[str], env: dict[str, str]) -> str:
     return result.stdout or ""
 
 
+def verify_nemoclaw_sandbox(
+    *,
+    openshell_bin: str,
+    sandbox: str,
+    env: dict[str, str],
+) -> None:
+    result = subprocess.run(
+        [
+            openshell_bin,
+            "sandbox",
+            "exec",
+            "-n",
+            sandbox,
+            "--timeout",
+            "10",
+            "--no-tty",
+            "--",
+            "true",
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+    detail = (result.stdout or "").strip()
+    hint = (
+        f"NemoClaw sandbox '{sandbox}' is not reachable. "
+        "Set REVNEST_NEMOCLAW_SANDBOX or pass --nemoclaw-sandbox with the active sandbox name "
+        "(current local default is 'my-assistant')."
+    )
+    raise RuntimeSetupError(f"{hint}\n{detail}" if detail else hint)
+
+
 def sync_workspace_to_sandbox(
     *,
     openshell_bin: str,
@@ -1049,6 +1213,15 @@ def prepare_openclaw_command(
 ) -> tuple[list[str], dict[str, str]]:
     agent_options = build_agent_options(args)
     openclaw_bin = find_executable("openclaw", env)
+    if getattr(args, "force_host_openclaw", False):
+        if not openclaw_bin:
+            raise RuntimeSetupError(
+                "Host OpenClaw is required for this runtime mode, but no host openclaw executable was found. "
+                "Use --runtime-mode nemoclaw or install/run OpenClaw on the host."
+            )
+        print("[wrapper] Running OpenClaw on the host runtime.", flush=True)
+        return [openclaw_bin, "agent", *agent_options, "--message", message], env
+
     if openclaw_bin and not args.force_nemoclaw:
         return [openclaw_bin, "agent", *agent_options, "--message", message], env
 
@@ -1061,9 +1234,10 @@ def prepare_openclaw_command(
     sandbox_env = dict(env)
     sandbox_env.setdefault("OPENSHELL_GATEWAY", "nemoclaw")
     print(
-        f"[wrapper] Host OpenClaw not found; running OpenClaw inside NemoClaw sandbox '{sandbox}'.",
+        f"[wrapper] Running OpenClaw inside NemoClaw sandbox '{sandbox}'.",
         flush=True,
     )
+    verify_nemoclaw_sandbox(openshell_bin=openshell_bin, sandbox=sandbox, env=sandbox_env)
     if not args.no_sandbox_sync:
         sync_workspace_to_sandbox(openshell_bin=openshell_bin, sandbox=sandbox, workdir=workdir, env=sandbox_env)
     remote_message_path = upload_message_to_sandbox(
@@ -1257,7 +1431,7 @@ Decision: produce an internal `price_calendars_by_property_id` object keyed by e
 
 {build_pricing_decision_loop_instructions("hotel", pricing_start_date, args.final_reasoning_model)}
 
-Output: after all guarded calendars are ready, publish forecast data first by calling `tools/revpar_estimate.py write-prices` once per room type. Each call must use that room type's property_id, min_price, max_price, pricing_horizon, room_count/rooms, occupancy when available, `--price-calendar-json` for only that room type, `--run-id "{args.run_id}"`, `--trace-log-path "{args.log_path}"`, and `--conversation-id "revy-heartbeat-<property_id>"`. These hotel `property_price` rows are Revy forecast/recommendation data for the WebApp chart, not live MockHotel/PMS writes. After every room type forecast publish succeeds or fails clearly, call the `revnest-revenue-tools` MCP `review_hotel_price_adjustments` tool with account_id "{args.account_id}", run_id "{args.run_id}", the complete `price_calendars_by_property_id`, `room_type_properties_json`, start_date "{pricing_start_date}", and the final calendar end date. This approval gate compares against MockHotel current rates once, creates `pricing_record` pending tasks only when the difference is at least USD 25 and at least 15%, and sends one best-effort Discord summary through `DISCORD_WEBHOOK_URL` when configured. If Discord fails, keep the pending tasks. If the user asks to write directly to MockHotel PMS, explain that human WebApp approval is required and stage pending tasks only. If the MCP tool is unavailable, log `revpar_publish` failed/skipped with substage `mockhotel_review` and state that hotel pending approval tasks were not created. Do not call WebApp accept APIs, MockHotel write APIs, direct MockHotel database writes, create a hotel aggregate property, or write live MockHotel prices from Claw.
+Output: after all guarded calendars are ready, publish forecast data first by calling `tools/revpar_estimate.py write-prices` once per room type. Each call must use that room type's property_id, min_price, max_price, pricing_horizon, room_count/rooms, occupancy when available, `--price-calendar-json` for only that room type, `--run-id "{args.run_id}"`, `--trace-log-path "{args.log_path}"`, and `--conversation-id "revy-heartbeat-<property_id>"`. These hotel `property_price` rows are Revy forecast/recommendation data for the WebApp chart, not live MockHotel/PMS writes. After every room type forecast publish succeeds or fails clearly, call the `revnest-revenue-tools` MCP `review_hotel_price_adjustments` tool with account_id "{args.account_id}", run_id "{args.run_id}", the complete `price_calendars_by_property_id`, `room_type_properties_json`, start_date "{pricing_start_date}", and the final calendar end date. This approval gate compares against MockHotel current rates once and classifies pending tasks as `price_adjustment_required` when the current PMS rate is outside Revy's strategy range, or `price_review_recommended` when the current rate is inside range but the final recommendation is materially different, confidence is low, or guardrail review is needed. It sends one best-effort Discord summary through `DISCORD_WEBHOOK_URL` when configured. If Discord fails, keep the pending tasks. If the user asks to write directly to MockHotel PMS, explain that human WebApp approval is required and stage pending tasks only. If the MCP tool is unavailable, log `revpar_publish` failed/skipped with substage `mockhotel_review` and state that hotel pending approval tasks were not created. Do not call WebApp accept APIs, MockHotel write APIs, direct MockHotel database writes, create a hotel aggregate property, or write live MockHotel prices from Claw.
 
 Use these stage ids when applicable:
 context, guardrail_review, market_data_parallel, weather, holidays, events_ticketmaster, events_serpapi, hotel_comps_serpapi, hotel_comps_moodtrip, tourism_tavily, pricing_decision, revpar_publish.
@@ -1270,6 +1444,10 @@ def build_message(args: argparse.Namespace) -> str:
     pricing_start_date = getattr(args, "pricing_start_date", dt.datetime.now(dt.UTC).date().isoformat())
     pricing_timezone = getattr(args, "pricing_timezone", "UTC")
     pricing_timezone_source = getattr(args, "pricing_timezone_source", "fallback_utc")
+    conversation_user_message = f"Run Revy pricing workflow for property_id {args.property_id} ({args.property_type})."
+    if args.message_extra:
+        conversation_user_message = f"{conversation_user_message} {args.message_extra}"
+    conversation_user_message_json = json.dumps(conversation_user_message, ensure_ascii=False)
     if args.property_type == "hotel" and getattr(args, "hotel_scope", "room-type") == "all-room-types":
         return build_hotel_batch_message(args, pricing_start_date, pricing_timezone, pricing_timezone_source)
     return f"""Use the `{WORKFLOW_NAME}` skill as the primary workflow. Follow the installed skill structure exactly: context, pricing-guardrails, pricing-market-data, pricing-decision-reasoning, then pricing-output-publisher.
@@ -1317,7 +1495,7 @@ Use `pricing-decision-reasoning` only after context, guardrails, and market-data
 
 {build_pricing_decision_loop_instructions(args.property_type, pricing_start_date, args.final_reasoning_model)}
 
-Use `pricing-output-publisher` after the guarded price_calendar is ready. For Airbnb, draft the final concise user-facing explanation before publishing, then call tools/revpar_estimate.py with account_id, property_id, min_price, max_price, pricing_horizon, inline --price-calendar-json, rooms/room_count, occupancy when available, property context JSON when useful, --run-id "{args.run_id}", --conversation-id "{args.conversation_id}", --trace-log-path "{args.log_path}", --conversation-title, --conversation-summary, and --final-message containing that exact final explanation. This saves Airbnb suggested prices directly to PostgreSQL `property_price` and the explanation/progress trace to `revy_conversation`; return the same explanation to the user after the write finishes. For hotel single-room-type runs, publish the forecast row to `property_price` and `revy_conversation` first, then call the `revnest-revenue-tools` MCP `review_hotel_price_adjustments` tool with `price_calendars_by_property_id` shaped as `{{property_id: price_calendar}}`, room type metadata, and the calendar date range. The hotel approval gate creates pending tasks only for MockHotel differences of at least USD 25 and at least 15%, sends one best-effort Discord summary when configured, and never writes live MockHotel prices directly from Claw. If a prompt asks to write to MockHotel PMS, do not call WebApp accept APIs, MockHotel write APIs, or direct MockHotel database writes; create pending tasks and tell the user WebApp human approval is required.
+Use `pricing-output-publisher` after the guarded price_calendar is ready. For Airbnb, draft the final concise user-facing explanation before publishing, then call tools/revpar_estimate.py with account_id, property_id, min_price, max_price, pricing_horizon, inline --price-calendar-json, rooms/room_count, occupancy when available, property context JSON when useful, --run-id "{args.run_id}", --conversation-id "{args.conversation_id}", --trace-log-path "{args.log_path}", --user-message {conversation_user_message_json}, --conversation-title, --conversation-summary, and --final-message containing that exact final explanation. This saves Airbnb suggested prices directly to PostgreSQL `property_price` and the explanation/progress trace to `revy_conversation`; return the same explanation to the user after the write finishes. For hotel single-room-type runs, publish the forecast row to `property_price` and `revy_conversation` first, include user_message {conversation_user_message_json} in the saved conversation when using the MCP publisher or `--user-message` when using tools/revpar_estimate.py, then call the `revnest-revenue-tools` MCP `review_hotel_price_adjustments` tool with `price_calendars_by_property_id` shaped as `{{property_id: price_calendar}}`, room type metadata, and the calendar date range. The hotel approval gate classifies pending tasks as `price_adjustment_required` when the current PMS rate is outside Revy's strategy range, or `price_review_recommended` when the current rate is inside range but the final recommendation is materially different, confidence is low, or guardrail review is needed. It sends one best-effort Discord summary when configured and never writes live MockHotel prices directly from Claw. If a prompt asks to write to MockHotel PMS, do not call WebApp accept APIs, MockHotel write APIs, or direct MockHotel database writes; create pending tasks and tell the user WebApp human approval is required.
 
 min_price and max_price are guardrails, not current price. If no current price is explicitly supplied, visible on the verified listing page, or read from the database, keep current_price and change_pct unknown/null and do not report current RevPAR.
 
@@ -1430,9 +1608,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Local model used by the final compact reasoning verifier before publish",
     )
     parser.add_argument(
+        "--runtime-mode",
+        choices=["split-demo", "auto", "host-openclaw", "nemoclaw"],
+        default=os.environ.get("REVNEST_RUNTIME_MODE", DEFAULT_RUNTIME_MODE),
+        help=(
+            "Execution runtime. split-demo runs hotel through NemoClaw and Airbnb through host OpenClaw; "
+            "auto keeps legacy host-first fallback behavior."
+        ),
+    )
+    parser.add_argument(
         "--nemoclaw-sandbox",
         default=os.environ.get("REVNEST_NEMOCLAW_SANDBOX", DEFAULT_NEMOCLAW_SANDBOX),
-        help="NemoClaw sandbox used when host OpenClaw is unavailable",
+        help=f"NemoClaw sandbox used when host OpenClaw is unavailable (default: {DEFAULT_NEMOCLAW_SANDBOX})",
     )
     parser.add_argument(
         "--nemoclaw-workdir",
@@ -1449,12 +1636,41 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run through NemoClaw even if a host openclaw executable exists",
     )
+    parser.add_argument(
+        "--force-host-openclaw",
+        action="store_true",
+        help="Run through host OpenClaw and fail if host OpenClaw is unavailable",
+    )
     return parser
+
+
+def apply_runtime_mode(args: argparse.Namespace) -> argparse.Namespace:
+    if args.runtime_mode == "nemoclaw":
+        args.force_nemoclaw = True
+        args.force_host_openclaw = False
+    elif args.runtime_mode == "host-openclaw":
+        args.force_nemoclaw = False
+        args.force_host_openclaw = True
+    elif args.runtime_mode == "split-demo":
+        if args.property_type == "hotel":
+            args.force_nemoclaw = True
+            args.force_host_openclaw = False
+        elif args.property_type == "airbnb":
+            args.force_nemoclaw = False
+            args.force_host_openclaw = True
+    if args.force_nemoclaw and args.force_host_openclaw:
+        raise ValueError("--force-nemoclaw and --force-host-openclaw cannot both be set")
+    return args
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    try:
+        args = apply_runtime_mode(args)
+    except ValueError as exc:
+        print(f"[wrapper] {exc}", flush=True)
+        return 2
 
     if not args.session_id:
         args.session_id = f"pricing-workflow-{timestamp_slug()}"

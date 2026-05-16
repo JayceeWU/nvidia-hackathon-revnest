@@ -336,6 +336,8 @@ def build_workflow_command(row: dict[str, Any], args: argparse.Namespace, batch_
         args.account_id,
         "--property-type",
         "hotel",
+        "--runtime-mode",
+        "nemoclaw",
         "--property-id",
         property_id,
         "--min-price",
@@ -388,6 +390,8 @@ def build_batch_workflow_command(args: argparse.Namespace, batch_timestamp: str)
         args.account_id,
         "--property-type",
         "hotel",
+        "--runtime-mode",
+        "nemoclaw",
         "--hotel-scope",
         "all-room-types",
         "--thinking",
@@ -573,4 +577,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -102,7 +102,7 @@ python3 tools/revpar_estimate.py write-prices \
   --min-price <min_price> \
   --max-price <max_price> \
   --pricing-horizon <pricing_horizon> \
-  --property-name "<listing title>" \
+  --property-name "<human-readable listing title + area + room type>" \
   --property-type "Airbnb" \
   --location "<city, state>" \
   --price-calendar-json '<price_calendar_json>' \
@@ -115,6 +115,11 @@ python3 tools/revpar_estimate.py write-prices \
   --conversation-summary "<one-sentence summary>" \
   --final-message '<final_user_facing_summary>'
 ```
+
+For Airbnb, `--property-name` must be human-readable. Prefer the trusted
+listing title plus city/state or neighborhood plus listing/room type, for
+example `Ocean View Studio - Santa Cruz, CA - Entire rental unit`. Do not pass a
+raw Airbnb room id or `airbnb-...` property id as the display name.
 
 Use `--no-create-property` only when the workflow intentionally requires the
 property to already exist.
@@ -146,6 +151,8 @@ Return a concise text summary with:
   lift, and expected revenue when available
 - database write-back status: rows written to `property_price`, `revy_conversation` write status, property id, and date range
 - for hotel runs, MockHotel approval-gate status: comparisons checked, pending tasks created, and Discord sent/skipped/failed
+- for hotel pending tasks, include whether they were classified as
+  `price_adjustment_required` or `price_review_recommended`
 - any guardrail adequacy warning, especially when the supplied `max_price`
   appears too low for listing size or comp evidence
 - note that the WebApp forecast chart will refresh from PostgreSQL

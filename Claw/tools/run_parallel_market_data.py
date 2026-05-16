@@ -44,6 +44,10 @@ WORKFLOW_NAME = "pricing-workflow"
 DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
 
 
+def utc_now_iso() -> str:
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+
+
 def parse_iso_date(value: str, field_name: str) -> dt.date:
     try:
         return dt.date.fromisoformat(value)
@@ -162,6 +166,9 @@ def summary_payload(
         "summary": result.get("summary"),
         "returncode": result.get("returncode"),
         "duration_seconds": result.get("duration_seconds"),
+        "collected_at": result.get("collected_at"),
+        "source_started_at": result.get("source_started_at"),
+        "source_completed_at": result.get("source_completed_at"),
         "command": result.get("command"),
         "error": result.get("error"),
         "json": result.get("json"),
@@ -326,7 +333,16 @@ def median(values: list[float]) -> float | None:
     return cleaned[len(cleaned) // 2]
 
 
-def weather_dashboard_signal(args: argparse.Namespace, payload: dict[str, Any], summary: str | None) -> dict[str, Any]:
+def result_collected_at(result: dict[str, Any] | None) -> str:
+    return str((result or {}).get("collected_at") or (result or {}).get("source_completed_at") or utc_now_iso())
+
+
+def weather_dashboard_signal(
+    args: argparse.Namespace,
+    payload: dict[str, Any],
+    summary: str | None,
+    collected_at: str,
+) -> dict[str, Any]:
     daily = payload.get("daily") or payload.get("days") or []
     daily = daily if isinstance(daily, list) else []
     highs = [number_or_none(day.get("temperature_max_f") or day.get("high_f") or day.get("high")) for day in daily if isinstance(day, dict)]
@@ -374,6 +390,7 @@ def weather_dashboard_signal(args: argparse.Namespace, payload: dict[str, Any], 
         "trend": "neutral" if trend == "flat" else trend,
         "impactTrend": trend,
         "footnote": footnote,
+        "collectedAt": collected_at,
         "days": dashboard_days[:7],
         "sourceSummary": summary,
     }
@@ -396,7 +413,13 @@ def event_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return output
 
 
-def events_dashboard_signal(args: argparse.Namespace, ticketmaster_payload: dict[str, Any], serpapi_payload: dict[str, Any], summary: str | None) -> dict[str, Any]:
+def events_dashboard_signal(
+    args: argparse.Namespace,
+    ticketmaster_payload: dict[str, Any],
+    serpapi_payload: dict[str, Any],
+    summary: str | None,
+    collected_at: str,
+) -> dict[str, Any]:
     events = event_items(ticketmaster_payload) + event_items(serpapi_payload)
     impact_counts: dict[str, int] = {}
     for item in events:
@@ -423,6 +446,7 @@ def events_dashboard_signal(args: argparse.Namespace, ticketmaster_payload: dict
         "headline": headline,
         "trend": trend,
         "footnote": footnote,
+        "collectedAt": collected_at,
         "next": events[:5],
         "sourceSummary": summary,
     }
@@ -451,7 +475,12 @@ def hotel_comp_daily_medians(payload: dict[str, Any]) -> list[float]:
     return medians
 
 
-def competitor_dashboard_signal(args: argparse.Namespace, payload: dict[str, Any], summary_text: str | None) -> dict[str, Any]:
+def competitor_dashboard_signal(
+    args: argparse.Namespace,
+    payload: dict[str, Any],
+    summary_text: str | None,
+    collected_at: str,
+) -> dict[str, Any]:
     summary = payload.get("summary") or {}
     medians = hotel_comp_daily_medians(payload)
     median_rate = number_or_none(summary.get("median_of_daily_medians")) or number_or_none(summary.get("median_rate_per_night")) or median(medians)
@@ -466,11 +495,12 @@ def competitor_dashboard_signal(args: argparse.Namespace, payload: dict[str, Any
         "delta_pct": delta_pct,
         "sample_size": len(properties),
         "trend": trend,
+        "collectedAt": collected_at,
         "sourceSummary": summary_text,
     }
 
 
-def occupancy_dashboard_signal(property_rows: list[dict[str, Any]], horizon: int) -> dict[str, Any] | None:
+def occupancy_dashboard_signal(property_rows: list[dict[str, Any]], horizon: int, collected_at: str) -> dict[str, Any] | None:
     available = 0
     booked = 0
     weighted_rates = []
@@ -494,6 +524,7 @@ def occupancy_dashboard_signal(property_rows: list[dict[str, Any]], horizon: int
         "booked_room_nights": booked,
         "available_room_nights": available,
         "trend": trend,
+        "collectedAt": collected_at,
     }
 
 
@@ -510,17 +541,29 @@ def build_hotel_home_dashboard_data(
     serpapi_events_result = result_for_stage(results, "events_serpapi")
     comps_result = result_for_stage(results, "hotel_comps_serpapi")
     property_rows = read_account_property_rows(env, args.account_id)
+    dashboard_collected_at = utc_now_iso()
 
     demand_signals: dict[str, Any] = {}
-    demand_signals["weather"] = weather_dashboard_signal(args, result_json(weather_result), (weather_result or {}).get("summary"))
+    demand_signals["weather"] = weather_dashboard_signal(
+        args,
+        result_json(weather_result),
+        (weather_result or {}).get("summary"),
+        result_collected_at(weather_result),
+    )
     demand_signals["events"] = events_dashboard_signal(
         args,
         result_json(ticketmaster_result),
         result_json(serpapi_events_result),
         compact_list([str((ticketmaster_result or {}).get("summary") or ""), str((serpapi_events_result or {}).get("summary") or "")], 2),
+        max(result_collected_at(ticketmaster_result), result_collected_at(serpapi_events_result)),
     )
-    demand_signals["competitor"] = competitor_dashboard_signal(args, result_json(comps_result), (comps_result or {}).get("summary"))
-    occupancy = occupancy_dashboard_signal(property_rows, horizon)
+    demand_signals["competitor"] = competitor_dashboard_signal(
+        args,
+        result_json(comps_result),
+        (comps_result or {}).get("summary"),
+        result_collected_at(comps_result),
+    )
+    occupancy = occupancy_dashboard_signal(property_rows, horizon, dashboard_collected_at)
     if occupancy:
         demand_signals["occupancy"] = occupancy
 
@@ -535,7 +578,8 @@ def build_hotel_home_dashboard_data(
             "startDate": start_date.isoformat(),
             "endDate": end_date.isoformat(),
             "pricingHorizon": horizon,
-            "updatedAt": dt.datetime.now(dt.UTC).isoformat(),
+            "collectedAt": dashboard_collected_at,
+            "updatedAt": dashboard_collected_at,
         },
     }
 
@@ -776,6 +820,7 @@ def run_task(task: dict[str, Any], env: dict[str, str], log_path: Path, timeout_
     stage = task["stage"]
     tool = task["tool"]
     run_id = task["run_id"]
+    source_started_at = utc_now_iso()
     started = time.monotonic()
 
     log_event(
@@ -799,6 +844,7 @@ def run_task(task: dict[str, Any], env: dict[str, str], log_path: Path, timeout_
             check=False,
         )
         duration = round(time.monotonic() - started, 3)
+        source_completed_at = utc_now_iso()
         payload = parse_json_output(proc.stdout)
         error = None
         if stage == "tourism_tavily" and payload and payload.get("tool") == "pricing-context" and not payload.get("error"):
@@ -842,6 +888,9 @@ def run_task(task: dict[str, Any], env: dict[str, str], log_path: Path, timeout_
             "summary": message,
             "returncode": proc.returncode,
             "duration_seconds": duration,
+            "collected_at": source_completed_at,
+            "source_started_at": source_started_at,
+            "source_completed_at": source_completed_at,
             "command": task["display_command"],
             "error": error,
             "json": payload,
@@ -850,6 +899,7 @@ def run_task(task: dict[str, Any], env: dict[str, str], log_path: Path, timeout_
         }
     except subprocess.TimeoutExpired as exc:
         duration = round(time.monotonic() - started, 3)
+        source_completed_at = utc_now_iso()
         error = f"timed out after {timeout_seconds} seconds"
         log_event(
             run_id=run_id,
@@ -869,6 +919,9 @@ def run_task(task: dict[str, Any], env: dict[str, str], log_path: Path, timeout_
             "summary": f"{task['label']} timed out after {timeout_seconds} seconds and returned no usable market signal.",
             "returncode": 124,
             "duration_seconds": duration,
+            "collected_at": source_completed_at,
+            "source_started_at": source_started_at,
+            "source_completed_at": source_completed_at,
             "command": task["display_command"],
             "error": error,
             "json": None,

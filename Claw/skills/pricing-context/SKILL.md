@@ -60,6 +60,9 @@ before location-based tools.
 Extract these fields from the trusted browser reads:
 
 - `capacity`
+- `listing_title`
+- `listing_type` or `room_type`
+- `neighborhood` when visible
 - `zip_code`
 - `county`
 - `state`
@@ -91,9 +94,13 @@ WHERE account_id = <account_id>::uuid
   AND id = <property_id>;
 ```
 
-Use JSON keys `capacity`, `zipCode`, `county`, `state`, `city`, `bed`, `bath`,
+Use JSON keys `capacity`, `listingTitle`, `listingType`, `roomType`,
+`neighborhood`, `zipCode`, `county`, `state`, `city`, `bed`, `bath`,
 `otherInfo`; include `beds` and `bathroom` as compatibility aliases when those
-values are known.
+values are known. Also write a human-readable `name` built from the trusted
+listing title, city/state or neighborhood, and listing/room type. Never leave a
+final Airbnb display name as `Airbnb <long room id>` or the raw `airbnb-...`
+property id.
 
 ## Stop Conditions
 

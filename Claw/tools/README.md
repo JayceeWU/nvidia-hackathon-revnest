@@ -16,6 +16,7 @@ python3 Claw/tools/progress_logger.py --help
 python3 Claw/tools/reasoning_step_logger.py --help
 python3 Claw/tools/run_parallel_market_data.py --help
 python3 Claw/tools/run_pricing_agent.py --help
+python3 Claw/tests/run_strategy_rag_gate_tests.py
 ```
 
 If your shell is already in `Claw`, drop the `Claw/` prefix and use
@@ -92,6 +93,22 @@ pass `--clear-log`.
   user-facing summaries and metrics, not hidden chain-of-thought.
 - `run_parallel_market_data.py` is the pricing-workflow fan-out/fan-in helper. After context is verified, it starts weather, holidays, Ticketmaster, SerpApi events, SerpApi hotel/vacation-rental comps, and Tavily concurrently, writes child progress events, upserts one `market_data_summary` row per source with account/property/date context, upserts `hotel_home_dashboard` for hotel runs, and saves combined results to `runs/<run_id>-market-data.json`. MoodTrip is MCP-hosted, so run it separately when available.
 - `run_pricing_agent.py` wraps `openclaw agent` for the pricing workflow, loads `.env`, and writes progress start/finish events even when the model times out before making tool calls. The runner is named generically because it supports both Airbnb and hotel pricing workflows.
+- When the runner falls back to NemoClaw, its local default sandbox is
+  `my-assistant`. Override with `--nemoclaw-sandbox` or
+  `REVNEST_NEMOCLAW_SANDBOX` if a different sandbox is active.
+
+## Strategy-RAG Gate Tests
+
+Run the anti-hallucination gate smoke tests before a demo:
+
+```bash
+python3 Claw/tests/run_strategy_rag_gate_tests.py
+```
+
+Expected result: all cases print `PASS`, including calculator rejection of
+`unsupported` final strategy review and publisher `write-prices --dry-run`
+rejection of missing strategy memory, `draft_unreviewed`, and `unsupported`.
+The script does not write to PostgreSQL.
 
 ## Notes
 

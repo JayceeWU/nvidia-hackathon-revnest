@@ -137,13 +137,20 @@ workflow.
 
 After hotel forecast rows are published, compare Revy's guarded room-type prices
 against MockHotel's current live rates through the `revnest-revenue-tools`
-`review_hotel_price_adjustments` tool. Use the default materiality threshold:
-create a pending task only when the absolute difference is at least USD 25 and
-the relative difference is at least 15%. The tool writes WebApp-compatible
-`pricing_record` rows with `record_type=pending_task` and sends one best-effort
-Discord summary through `DISCORD_WEBHOOK_URL` when configured. If Discord is not
-configured or fails, keep the pending tasks and report Discord as skipped or
-failed; do not block the workflow.
+`review_hotel_price_adjustments` tool. The approval gate classifies pending
+tasks:
+
+- `price_adjustment_required`: the current MockHotel rate is outside Revy's
+  strategy-supported suggested range.
+- `price_review_recommended`: the current rate is still inside the range, but
+  the final recommendation differs by at least USD 25 and at least 15%, the
+  calculator confidence is low, or guardrail review is needed.
+
+The tool writes WebApp-compatible `pricing_record` rows with
+`record_type=pending_task` and sends one best-effort Discord summary through
+`DISCORD_WEBHOOK_URL` when configured. If Discord is not configured or fails,
+keep the pending tasks and report Discord as skipped or failed; do not block the
+workflow.
 
 Hotel Claw runs must not write live MockHotel prices directly. Existing WebApp
 pending-task acceptance applies approved hotel changes to MockHotel.
