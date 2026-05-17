@@ -2,12 +2,12 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { UserIcon } from "./AgentIcons";
 
 const NAV_ITEMS = [
   { view: "home", label: "Home", href: "/" },
   { view: "properties", label: "My Properties", href: "/?view=properties" },
   { view: "revy", label: "Revy", href: "/?view=revy", icon: "/Revy.png" },
-  { view: "account", label: "Account", href: "/?view=account" },
 ];
 
 export default function DashboardShell({ activeView = "home", activeAccount, email, children }) {
@@ -41,6 +41,17 @@ export default function DashboardShell({ activeView = "home", activeAccount, ema
               </button>
             ))}
           </nav>
+        </div>
+        <div className="airbnb-topbar-right">
+          <button
+            className={activeView === "account" ? "airbnb-account-button active" : "airbnb-account-button"}
+            type="button"
+            onClick={() => go("/?view=account")}
+            aria-label="Account"
+            title={accountEmail || accountName || "Account"}
+          >
+            <UserIcon width={20} height={20} />
+          </button>
         </div>
       </header>
 

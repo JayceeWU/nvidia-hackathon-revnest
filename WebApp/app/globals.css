@@ -770,6 +770,16 @@ button {
   color: var(--ink);
 }
 
+.airbnb-chart-error {
+  border-color: #f0b5a2;
+  color: #8a341f;
+  background: #fff1ec;
+}
+
+.airbnb-chart-error strong {
+  color: #7c2d12;
+}
+
 
 .airbnb-empty-workspace {
   display: grid;
@@ -3560,6 +3570,54 @@ button {
   color: #fecaca;
 }
 
+.pricing-reasoning-console {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 10px 0 8px;
+  border-top: 1px solid rgba(231, 243, 236, 0.12);
+  border-bottom: 1px solid rgba(231, 243, 236, 0.12);
+}
+
+.pricing-reasoning-console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(231, 243, 236, 0.82);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.pricing-reasoning-console-head span {
+  color: rgba(231, 243, 236, 0.5);
+  text-transform: none;
+}
+
+.reasoning-event-line {
+  border-left-color: rgba(214, 168, 79, 0.42);
+}
+
+.reasoning-console-text {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.reasoning-console-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reasoning-console-metrics small {
+  border: 1px solid rgba(231, 243, 236, 0.12);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: rgba(231, 243, 236, 0.62);
+  background: rgba(231, 243, 236, 0.04);
+}
+
 .console-line.failed {
   color: #fecaca;
 }
@@ -4305,6 +4363,19 @@ button {
   white-space: nowrap;
 }
 
+.revy-model-pill {
+  align-self: flex-start;
+  justify-content: center;
+  margin-left: auto;
+  max-width: min(680px, 56vw);
+  min-height: 34px;
+  padding-block: 6px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: center;
+  white-space: normal;
+}
+
 .revy-current-card .live-agent-grid {
   --live-agent-panel-height: 460px;
 }
@@ -4495,77 +4566,6 @@ button {
 
 .revy-history-messages .chat-message.user small {
   color: #64748b;
-}
-
-.revy-reasoning-list {
-  display: grid;
-  gap: 10px;
-  max-height: 520px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.revy-reasoning-step {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-left: 4px solid #1c5b43;
-  border-radius: 8px;
-  padding: 12px;
-  background: #fbfdfb;
-}
-
-.revy-reasoning-step-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.revy-reasoning-step-heading strong,
-.revy-reasoning-step p,
-.revy-reasoning-meta span,
-.revy-reasoning-metrics span,
-.revy-reasoning-step small {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.revy-reasoning-step-heading span,
-.revy-reasoning-step small,
-.revy-reasoning-meta span,
-.revy-reasoning-metrics span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.revy-reasoning-step p {
-  margin: 0;
-  color: #1f2937;
-  line-height: 1.45;
-}
-
-.revy-reasoning-meta,
-.revy-reasoning-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.revy-reasoning-meta span,
-.revy-reasoning-metrics span {
-  border: 1px solid rgba(31, 41, 55, 0.1);
-  border-radius: 999px;
-  padding: 5px 8px;
-  background: #f1f5f9;
-  font-weight: 800;
-}
-
-.revy-reasoning-facts {
-  margin: 0;
-  padding-left: 18px;
-  color: #334155;
-  line-height: 1.45;
 }
 
 .revy-debug-stat,

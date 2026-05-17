@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 
-export default function RevyAgentPriceChart({ data, onPointClick }) {
+export default function RevyAgentPriceChart({ data, onPointClick, error = "" }) {
   const points = (Array.isArray(data) ? data : []).filter((item) => Number.isFinite(Number(item.agent)));
   const [activeIndex, setActiveIndex] = useState(Math.min(3, Math.max(points.length - 1, 0)));
 
   if (points.length === 0) {
     return (
-      <div className="airbnb-chart-empty">
-        <strong>No Revy prices yet</strong>
-        <span>Run Revy on this property to create an agent price curve.</span>
+      <div className={error ? "airbnb-chart-empty airbnb-chart-error" : "airbnb-chart-empty"}>
+        <strong>{error ? "Revy pricing failed" : "No Revy prices yet"}</strong>
+        <span>{error || "Run Revy on this property to create an agent price curve."}</span>
       </div>
     );
   }

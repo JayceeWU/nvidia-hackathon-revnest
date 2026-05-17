@@ -14,9 +14,9 @@ import {
   MenuItem,
   TextField,
 } from "@mui/material";
-import AgentRunPanels from "../components/AgentRunPanels";
 import RevyAgentPriceChart from "../components/RevyAgentPriceChart";
 import RevyHistoryPanel from "../components/RevyHistoryPanel";
+import RevyWorkspacePanel from "../components/RevyWorkspacePanel";
 import DemandSignalCard from "../components/DemandSignalCard";
 import {
   StepIcon,
@@ -180,13 +180,17 @@ const defaultRevyThinkingStatus = {
   propertyId: null,
   conversationId: null,
   status: "idle",
+  error: "",
   startedAt: null,
   updatedAt: null,
+  modelRouting: null,
+  finalReasoningVerification: null,
+  pricingReasoningSteps: [],
 };
 
 const defaultRevyState = {
   status: "idle",
-  model: "nemotron3:33b",
+  model: "qwen tool calls + Nemotron reasoning",
   headline: "Reviewing current pricing signals and waiting for the next host question.",
   updatedAt: "May 15, 2026 7:20 PM",
   events: [],
@@ -200,9 +204,22 @@ const defaultRevyState = {
 };
 
 const displayableRevyRunStatuses = new Set(["running", "completed", "failed", "stopped"]);
+const terminalRevyThinkingStatuses = new Set(["completed", "failed", "stopped", "idle"]);
 
 function revyStateHasDisplayableRun(state) {
   return Boolean(state?.runId || state?.activeRunId || displayableRevyRunStatuses.has(state?.status));
+}
+
+function isLiveRevyThinkingStatus(status) {
+  return Boolean(status?.isThinking) && !terminalRevyThinkingStatuses.has(status?.status || "idle");
+}
+
+function normalizeRevyThinkingStatus(status) {
+  const next = { ...defaultRevyThinkingStatus, ...(status || {}) };
+  if (!isLiveRevyThinkingStatus(next)) {
+    next.isThinking = false;
+  }
+  return next;
 }
 
 function normalizeRevyStateForDisplay(state) {
@@ -280,6 +297,24 @@ async function readJsonResponse(response, fallbackMessage) {
     throw new Error(payload.error || fallbackMessage);
   }
   return payload;
+}
+
+function isTransientFetchError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const name = String(error?.name || "").toLowerCase();
+  return (
+    name === "aborterror" ||
+    message.includes("failed to fetch") ||
+    message.includes("fetch failed") ||
+    message.includes("networkerror") ||
+    message.includes("network request failed") ||
+    (name === "typeerror" && message.includes("fetch"))
+  );
+}
+
+function logNonTransientFetchError(label, error) {
+  if (isTransientFetchError(error)) return;
+  console.error(label, error);
 }
 
 const connectionTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -383,7 +418,7 @@ export default function Home() {
   const displayedPendingTasks = isPendingTasksExpanded ? pendingTaskRecords : pendingTaskRecords.slice(0, 3);
   const displayedPriceLogs = isPriceLogExpanded ? priceLogRecords : priceLogRecords.slice(0, 3);
   const revyEvents = Array.isArray(revyState.events) ? revyState.events : [];
-  const isRevyThinking = Boolean(revyThinkingStatus.isThinking);
+  const isRevyThinking = Boolean(activeRevyRunId) || isLiveRevyThinkingStatus(revyThinkingStatus);
   const activeRevyConversation = revyConversations.find((conversation) => [conversation.id, conversation.conversationId].includes(selectedRevyConversationId)) || revyConversations[0] || null;
   const chatProperty = useMemo(() => {
     if (!chatPropertyId) return null;
@@ -450,19 +485,27 @@ export default function Home() {
       return conversations[0]?.conversationId || conversations[0]?.id || "";
     });
     if (payload.status) {
-      const nextStatus = { ...defaultRevyThinkingStatus, ...payload.status };
+      const nextStatus = normalizeRevyThinkingStatus(payload.status);
       setRevyThinkingStatus(nextStatus);
-      setActiveRevyRunId(nextStatus.runId || "");
+      setActiveRevyRunId((current) => {
+        if (isLiveRevyThinkingStatus(nextStatus)) return nextStatus.runId || current || "";
+        if (current && nextStatus.status === "idle") return current;
+        return "";
+      });
     }
     setChatMessages(Array.isArray(nextState.messages) && nextState.messages.length > 0 ? nextState.messages : defaultRevyState.messages);
   }, []);
 
   const loadRevyData = useCallback(async (accountId) => {
-    const response = await fetch(`/api/revy?accountId=${encodeURIComponent(accountId)}`);
-    const payload = await readJsonResponse(response, "Failed to load Revy data.");
-    applyRevyPayload(payload);
-
-    return payload;
+    try {
+      const response = await fetch(`/api/revy?accountId=${encodeURIComponent(accountId)}`, { cache: "no-store" });
+      const payload = await readJsonResponse(response, "Failed to load Revy data.");
+      applyRevyPayload(payload);
+      return payload;
+    } catch (error) {
+      if (isTransientFetchError(error)) return null;
+      throw error;
+    }
   }, [applyRevyPayload]);
 
   const loadRevyStatus = useCallback(async (accountId) => {
@@ -470,16 +513,21 @@ export default function Home() {
       setRevyThinkingStatus(defaultRevyThinkingStatus);
       return defaultRevyThinkingStatus;
     }
-    const response = await fetch(`/api/revy/status?accountId=${encodeURIComponent(accountId)}`);
-    const payload = await readJsonResponse(response, "Failed to load Revy status.");
-    const nextStatus = { ...defaultRevyThinkingStatus, ...payload };
-    setRevyThinkingStatus(nextStatus);
-    if (nextStatus.runId) {
-      setActiveRevyRunId(nextStatus.runId);
-    } else {
-      setActiveRevyRunId("");
+    try {
+      const response = await fetch(`/api/revy/status?accountId=${encodeURIComponent(accountId)}`, { cache: "no-store" });
+      const payload = await readJsonResponse(response, "Failed to load Revy status.");
+      const nextStatus = normalizeRevyThinkingStatus(payload);
+      setRevyThinkingStatus(nextStatus);
+      setActiveRevyRunId((current) => {
+        if (isLiveRevyThinkingStatus(nextStatus)) return nextStatus.runId || current || "";
+        if (current && nextStatus.status === "idle") return current;
+        return "";
+      });
+      return nextStatus;
+    } catch (error) {
+      if (isTransientFetchError(error)) return null;
+      throw error;
     }
-    return nextStatus;
   }, []);
 
   async function loadRevyConversationsForProperty(propertyId) {
@@ -537,19 +585,26 @@ export default function Home() {
         propertyId: property.id,
         conversationId: nextConversationId,
         status: "running",
+        error: "",
         startedAt,
+        modelRouting: payload.modelRouting || null,
+        finalReasoningVerification: null,
+        pricingReasoningSteps: [],
         updatedAt: new Date().toISOString(),
       });
       setRevyState((current) => ({
         ...current,
         status: "running",
+        model: payload.modelRouting
+          ? `${payload.modelRouting.toolModel} tools + ${payload.modelRouting.reasoningModel} reasoning`
+          : current.model,
         headline: `Running Revy for ${property.name}.`,
         updatedAt: new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }),
         events: [
           {
             timestamp: startedAt,
             stage: "context",
-            tool: "openclaw agent",
+            tool: String(property.propertyType || "").toLowerCase().includes("hotel") ? "nemoclaw agent" : "openclaw agent",
             status: "started",
             message: `Started Revy conversation ${nextConversationId} for ${property.name}.`,
           },
@@ -600,10 +655,10 @@ export default function Home() {
           console.error("Failed to restore account connections", error);
         });
         loadRevyData(user.id).catch((error) => {
-          console.error("Failed to restore Revy data", error);
+          logNonTransientFetchError("Failed to restore Revy data", error);
         });
         loadRevyStatus(user.id).catch((error) => {
-          console.error("Failed to restore Revy status", error);
+          logNonTransientFetchError("Failed to restore Revy status", error);
         });
       });
     } catch {
@@ -623,12 +678,12 @@ export default function Home() {
       loadDashboard(activeAccount.id).catch((error) => {
         console.error("Failed to refresh dashboard data", error);
       });
-      loadRevyStatus(activeAccount.id).catch((error) => {
-        console.error("Failed to refresh Revy status", error);
-      });
       if (revyStreamStatus !== "connected") {
+        loadRevyStatus(activeAccount.id).catch((error) => {
+          logNonTransientFetchError("Failed to refresh Revy status", error);
+        });
         loadRevyData(activeAccount.id).catch((error) => {
-          console.error("Failed to refresh Revy data", error);
+          logNonTransientFetchError("Failed to refresh Revy data", error);
         });
       }
     }, 5000);
@@ -670,8 +725,8 @@ export default function Home() {
       setRevyStreamStatus("fallback");
       if (!didFallback) {
         didFallback = true;
-        loadRevyData(activeAccount.id).catch((error) => console.error("Failed to fallback-load Revy data", error));
-        loadRevyStatus(activeAccount.id).catch((error) => console.error("Failed to fallback-load Revy status", error));
+        loadRevyData(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to fallback-load Revy data", error));
+        loadRevyStatus(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to fallback-load Revy status", error));
       }
     };
 
@@ -698,6 +753,9 @@ export default function Home() {
         setRevyState((current) => ({
           ...current,
           status: payload.status || current.status,
+          model: payload.modelRouting
+            ? `${payload.modelRouting.toolModel} tools + ${payload.modelRouting.reasoningModel} reasoning`
+            : current.model,
           headline:
             payload.status === "completed"
               ? "Revy finished the latest room pricing run."
@@ -714,11 +772,15 @@ export default function Home() {
             isThinking: false,
             runId: null,
             status: payload.status || current.status,
+            error: payload.error || failureReason || current.error || "",
+            modelRouting: payload.modelRouting || current.modelRouting || null,
+            finalReasoningVerification: payload.finalReasoningVerification || current.finalReasoningVerification || null,
+            pricingReasoningSteps: payload.pricingReasoningSteps || current.pricingReasoningSteps || [],
             updatedAt: new Date().toISOString(),
           }));
           if (activeAccount?.id) {
-            loadRevyStatus(activeAccount.id).catch((error) => console.error("Failed to refresh Revy status", error));
-            loadRevyData(activeAccount.id).catch((error) => console.error("Failed to refresh Revy conversations", error));
+            loadRevyStatus(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to refresh Revy status", error));
+            loadRevyData(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to refresh Revy conversations", error));
           }
         } else if (payload.status === "running") {
           setRevyThinkingStatus((current) => ({
@@ -727,7 +789,11 @@ export default function Home() {
             runId: payload.runId || activeRevyRunId,
             propertyId: payload.propertyId || current.propertyId,
             status: "running",
+            error: payload.error || "",
             startedAt: payload.startedAt || current.startedAt,
+            modelRouting: payload.modelRouting || current.modelRouting || null,
+            finalReasoningVerification: payload.finalReasoningVerification || current.finalReasoningVerification || null,
+            pricingReasoningSteps: payload.pricingReasoningSteps || current.pricingReasoningSteps || [],
             updatedAt: new Date().toISOString(),
           }));
         }
@@ -809,12 +875,12 @@ export default function Home() {
     try {
       await loadRevyData(payload.user.id);
     } catch (error) {
-      console.error("Failed to load Revy data", error);
+      logNonTransientFetchError("Failed to load Revy data", error);
     }
     try {
       await loadRevyStatus(payload.user.id);
     } catch (error) {
-      console.error("Failed to load Revy status", error);
+      logNonTransientFetchError("Failed to load Revy status", error);
     }
 
     setActiveAccount(payload.user);
@@ -874,7 +940,7 @@ export default function Home() {
         body: JSON.stringify({ accountId: activeAccount.id, runId: revyThinkingStatus.runId || activeRevyRunId || undefined }),
       });
       const payload = await readJsonResponse(response, "Failed to stop Revy thinking.");
-      const nextStatus = { ...defaultRevyThinkingStatus, ...(payload.status || payload) };
+      const nextStatus = normalizeRevyThinkingStatus(payload.status || payload);
       setRevyThinkingStatus(nextStatus);
       setActiveRevyRunId("");
       setQueuedRevySteer(null);
@@ -999,7 +1065,7 @@ export default function Home() {
           accountId: activeAccount.id,
           propertyType: "hotel",
           hotelScope: "all-room-types",
-          runtimeMode: "split-demo",
+          runtimeMode: "nemoclaw",
           supplementalInfo: "Hotel Home Run Revy requested for all hotel room types.",
         }),
       });
@@ -1015,19 +1081,26 @@ export default function Home() {
         propertyId: firstPropertyId,
         conversationId: payload.conversationId || null,
         status: "running",
+        error: "",
         startedAt,
+        modelRouting: payload.modelRouting || null,
+        finalReasoningVerification: null,
+        pricingReasoningSteps: [],
         updatedAt: new Date().toISOString(),
       });
       setRevyState((current) => ({
         ...current,
         status: "running",
+        model: payload.modelRouting
+          ? `${payload.modelRouting.toolModel} tools + ${payload.modelRouting.reasoningModel} reasoning`
+          : current.model,
         headline: "Running Revy for all hotel room types.",
         updatedAt: new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }),
         events: [
           {
             timestamp: startedAt,
             stage: "context",
-            tool: "openclaw agent",
+            tool: "nemoclaw agent",
             status: "started",
             message: `Started hotel all-room-types Revy run for ${payload.propertyIds?.length || 0} room types.`,
           },
@@ -1035,8 +1108,8 @@ export default function Home() {
       }));
       setActiveView("revy");
       loadDashboard(activeAccount.id).catch((error) => console.error("Failed to refresh dashboard after hotel Revy start", error));
-      loadRevyStatus(activeAccount.id).catch((error) => console.error("Failed to refresh Revy status after hotel Revy start", error));
-      loadRevyData(activeAccount.id).catch((error) => console.error("Failed to refresh Revy data after hotel Revy start", error));
+      loadRevyStatus(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to refresh Revy status after hotel Revy start", error));
+      loadRevyData(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to refresh Revy data after hotel Revy start", error));
     } catch (error) {
       setDashboardActionError(error.message);
     } finally {
@@ -1082,12 +1155,18 @@ export default function Home() {
         propertyId: property.id,
         conversationId: nextConversationId,
         status: "running",
+        error: "",
         startedAt,
+        modelRouting: payload.modelRouting || null,
+        finalReasoningVerification: null,
         updatedAt: new Date().toISOString(),
       });
       setRevyState((current) => ({
         ...current,
         status: "running",
+        model: payload.modelRouting
+          ? `${payload.modelRouting.toolModel} tools + ${payload.modelRouting.reasoningModel} reasoning`
+          : current.model,
         headline: `Running Revy for ${property.name} on ${selectedPricePoint.point?.day || "the selected date"}.`,
         updatedAt: new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }),
         events: [
@@ -1103,7 +1182,7 @@ export default function Home() {
       setSelectedPricePoint(null);
       setActiveView("revy");
       loadDashboard(activeAccount.id).catch((error) => console.error("Failed to refresh dashboard after Revy start", error));
-      loadRevyStatus(activeAccount.id).catch((error) => console.error("Failed to refresh Revy status after start", error));
+      loadRevyStatus(activeAccount.id).catch((error) => logNonTransientFetchError("Failed to refresh Revy status after start", error));
     } catch (error) {
       setPricePointError(error.message);
     } finally {
@@ -1739,70 +1818,23 @@ export default function Home() {
         ) : null}
 
         {activeView === "revy" ? (
-          <section className="revy-page">
-            <section className="airbnb-property-card revy-current-card">
-              <header className="agent-run-header revy-agent-header">
-                <div>
-                  <h2 className="agent-thinking-title">
-                    <span className="agent-thinking-icon">
-                      <Image className="revy-avatar-image" src="/Revy.png" alt="" width={34} height={34} />
-                    </span>
-                    <span>What Revy is thinking</span>
-                    <span className="agent-thinking-dots" aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
-                    </span>
-                  </h2>
-                </div>
-                <span className="model-pill">{revyState.model}</span>
-              </header>
-
-              <AgentRunPanels
-                events={revyEvents}
-                emptyMessage="Revy is ready for the next pricing signal."
-                runStatus={revyThinkingStatus.status || revyState.status}
-                startedAt={revyThinkingStatus.startedAt}
-              />
-
-              <section className="revy-chat-panel compact-revy-chat-panel" aria-label="Talk with Revy">
-                {queuedRevySteer ? (
-                  <div className="queued-steer-note" role="status">
-                    <strong>Queued steer</strong>
-                    <span>{queuedRevySteer.text}</span>
-                  </div>
-                ) : null}
-                <form className="chat-input-row" onSubmit={handleChatSubmit}>
-                  <input
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    placeholder={isRevyThinking ? "Type a steer and press Enter" : "Ask Revy"}
-                    aria-label="Message Revy"
-                    disabled={isStartingRevy && !isRevyThinking}
-                  />
-                  <button
-                    type={isRevyThinking ? "button" : "submit"}
-                    className={isRevyThinking ? "stop-thinking-button" : ""}
-                    disabled={isRevyThinking ? isStoppingRevy : !chatInput.trim() || isStartingRevy}
-                    onClick={isRevyThinking ? stopRevyThinking : undefined}
-                  >
-                    {isRevyThinking ? (isStoppingRevy ? "Stopping..." : "Stop thinking") : isStartingRevy ? "Starting..." : "Send"}
-                  </button>
-                </form>
-              </section>
-            </section>
-
-            <section className="airbnb-property-card revy-history-card">
-              <div className="airbnb-section-heading">
-                <h2>Revy History</h2>
-              </div>
-              <RevyHistoryPanel
-                conversations={revyConversations}
-                selectedConversationId={selectedRevyConversationId}
-                onSelectConversation={setSelectedRevyConversationId}
-              />
-            </section>
-          </section>
+          <RevyWorkspacePanel
+            revyState={revyState}
+            events={revyEvents}
+            thinkingStatus={revyThinkingStatus}
+            queuedSteer={queuedRevySteer}
+            chatInput={chatInput}
+            onChatInputChange={setChatInput}
+            onChatSubmit={handleChatSubmit}
+            isThinking={isRevyThinking}
+            isStarting={isStartingRevy || isStartingHotelRevy}
+            isStopping={isStoppingRevy}
+            activeRunId={activeRevyRunId}
+            onStopThinking={stopRevyThinking}
+            conversations={revyConversations}
+            selectedConversationId={selectedRevyConversationId}
+            onSelectConversation={setSelectedRevyConversationId}
+          />
         ) : null}
 
         {activeView === "properties" ? (
@@ -1923,7 +1955,11 @@ export default function Home() {
                     <div className="airbnb-section-heading">
                       <h2>Revy Suggested Prices</h2>
                     </div>
-                    <RevyAgentPriceChart data={selectedProperty.forecast} onPointClick={openPricePointDialog} />
+                    <RevyAgentPriceChart
+                      data={selectedProperty.forecast}
+                      error={selectedProperty.pricingOutputError}
+                      onPointClick={openPricePointDialog}
+                    />
                   </section>
                 </>
               ) : (

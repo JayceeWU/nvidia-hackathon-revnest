@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -14,6 +14,15 @@ const repoRoot = path.resolve(webRoot, "..");
 const clawRoot = path.join(repoRoot, "Claw");
 const runsDir = path.join(clawRoot, "runs");
 const agentRunFixture = process.env.REVNEST_AGENT_RUN_FIXTURE || "";
+const agentRunFixturesAllowed = process.env.REVNEST_ALLOW_AGENT_FIXTURES === "1";
+const activeAgentRunFixture = agentRunFixturesAllowed ? agentRunFixture : "";
+const defaultToolModel = process.env.REVNEST_TOOL_MODEL || process.env.REVNEST_OPENCLAW_MODEL || "ollama-local/qwen3.6:35b";
+const defaultToolEndpoint = process.env.REVNEST_TOOL_MODEL_BASE_URL || "http://127.0.0.1:11434/v1";
+const defaultTraceReasoningModel = process.env.REVNEST_TRACE_REASONING_MODEL || "nemotron3:33b";
+const defaultTraceReasoningEndpoint = process.env.REVNEST_TRACE_REASONING_BASE_URL || "http://127.0.0.1:11434/v1";
+const defaultReasoningModel = process.env.REVNEST_FINAL_REASONING_MODEL || "nemotron-3-super:latest";
+const defaultReasoningEndpoint = process.env.REVNEST_FINAL_REASONING_BASE_URL || "http://127.0.0.1:11434/v1";
+const defaultToolModelTimeoutSeconds = process.env.REVNEST_TOOL_MODEL_TIMEOUT_SECONDS || process.env.REVNEST_OPENCLAW_PROVIDER_TIMEOUT_SECONDS || "300";
 
 function sanitize(value) {
   return String(value || "run").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
@@ -28,6 +37,7 @@ function normalizePropertyType(value) {
 
 function normalizeRuntimeMode(value, propertyType) {
   if (propertyType === "airbnb") return "host-openclaw";
+  if (propertyType === "hotel") return "nemoclaw";
   const normalized = String(value || "").trim().toLowerCase();
   if (["split-demo", "auto", "host-openclaw", "nemoclaw"].includes(normalized)) {
     return normalized;
@@ -46,6 +56,64 @@ function runLogPath(runId) {
   return path.join(runsDir, `${runId}.log`);
 }
 
+function parsePositiveInteger(value) {
+  const parsed = Number(String(value || "").trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function processGroupForPid(pid) {
+  const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 1000,
+  });
+  if (result.status !== 0) return null;
+  return parsePositiveInteger(result.stdout);
+}
+
+function processGroupsForRunId(runId) {
+  if (!runId) return [];
+  const result = spawnSync("pgrep", ["-af", String(runId)], {
+    encoding: "utf8",
+    timeout: 1000,
+  });
+  if (result.status !== 0 || !result.stdout) return [];
+  const groups = new Set();
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!match) continue;
+    const pid = parsePositiveInteger(match[1]);
+    const command = match[2] || "";
+    if (!pid || pid === process.pid) continue;
+    if (!/(run_pricing_agent\.py|pricing_reasoning_trace\.py|openclaw|openclaw-agent)/.test(command)) continue;
+    const pgid = processGroupForPid(pid);
+    if (pgid && pgid !== process.pid) groups.add(pgid);
+  }
+  return [...groups];
+}
+
+function closeAgentBrowserSession(runId) {
+  spawnSync("agent-browser", ["--session", String(runId), "close"], {
+    cwd: clawRoot,
+    env: process.env,
+    stdio: "ignore",
+    timeout: 5000,
+  });
+}
+
+function signalProcessGroup(pgid, signal) {
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+export function isHostRunProcessAlive(runId) {
+  return processGroupsForRunId(runId).length > 0;
+}
+
 function inferStatus(events) {
   const finish = [...events].reverse().find((event) => event.stage === "agent_finish");
   if (finish?.status === "completed") return "completed";
@@ -55,6 +123,136 @@ function inferStatus(events) {
 
 function inferError(events) {
   return [...events].reverse().find((event) => event.error)?.error || null;
+}
+
+function defaultModelRouting() {
+  return {
+    toolModel: defaultToolModel,
+    toolEndpoint: defaultToolEndpoint,
+    toolModelRole: "tool_call_orchestration_only",
+    traceReasoningModel: defaultTraceReasoningModel,
+    traceReasoningEndpoint: defaultTraceReasoningEndpoint,
+    traceReasoningModelRole: "fast_visible_substage_reasoning_trace",
+    reasoningModel: defaultReasoningModel,
+    reasoningEndpoint: defaultReasoningEndpoint,
+    reasoningModelRole: "final_reasoning_verification_only",
+  };
+}
+
+function assertAgentRunFixtureAllowed() {
+  if (!agentRunFixture || agentRunFixturesAllowed) return;
+  throw new Error("REVNEST_AGENT_RUN_FIXTURE is test-only. Set REVNEST_ALLOW_AGENT_FIXTURES=1 only for e2e test servers.");
+}
+
+function modelRoutingFromEvents(events, fallback = defaultModelRouting()) {
+  const event = events.find((item) => item?.metadata?.modelRouting);
+  return event?.metadata?.modelRouting || fallback;
+}
+
+const PRICING_REASONING_ORDER = [
+  "supply_snapshot",
+  "demand_snapshot",
+  "supply_demand_synthesis",
+  "occupancy_result",
+  "guardrail_check",
+  "calculator_run",
+  "final_calendar",
+  "final_reasoning_verification",
+];
+
+function labelizeSubstage(value) {
+  return String(value || "reasoning step")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function arrayFrom(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function objectFrom(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function pricingReasoningRank(event) {
+  const metadata = objectFrom(event?.metadata);
+  const status = event?.status || "info";
+  let rank = 0;
+  if (status === "started") rank = 1;
+  else if (status === "failed") rank = 2;
+  else if (status === "info" || status === "completed" || status === "skipped") rank = 3;
+  if (metadata.reasoningEngine === "source_fact_trace") rank += 1;
+  if (metadata.reasoningEngine === "nemotron") rank += 2;
+  if (metadata.finalReasoningVerification) rank += 3;
+  return rank;
+}
+
+function formatPricingReasoningStep(event) {
+  const metadata = objectFrom(event.metadata);
+  const finalVerification = objectFrom(metadata.finalReasoningVerification);
+  return {
+    id: `${event.timestamp || "event"}-${event.substage}`,
+    timestamp: event.timestamp || null,
+    stage: event.stage,
+    substage: event.substage,
+    label: labelizeSubstage(event.substage),
+    status: event.status || "info",
+    summary: event.message || finalVerification.summary || "",
+    facts: arrayFrom(metadata.facts),
+    metrics: objectFrom(metadata.metrics || finalVerification.checked),
+    sources: arrayFrom(metadata.sources),
+    confidence: metadata.confidence || null,
+    engine: metadata.reasoningEngine || null,
+    model: metadata.reasoningModel || finalVerification.model || null,
+    endpoint: metadata.reasoningEndpoint || finalVerification.endpoint || null,
+    tool: event.tool || event.called_skill || event.skill || finalVerification.tool || null,
+    rank: pricingReasoningRank(event),
+  };
+}
+
+function pricingReasoningStepsFromEvents(events) {
+  const bySubstage = new Map();
+  for (const event of events || []) {
+    if (event?.stage !== "pricing_decision" || !event.substage) continue;
+    const next = formatPricingReasoningStep(event);
+    const existing = bySubstage.get(event.substage);
+    if (!existing || next.rank >= existing.rank) {
+      bySubstage.set(event.substage, next);
+    }
+  }
+  const ordered = [];
+  for (const substage of PRICING_REASONING_ORDER) {
+    if (bySubstage.has(substage)) {
+      ordered.push(bySubstage.get(substage));
+      bySubstage.delete(substage);
+    }
+  }
+  return [...ordered, ...bySubstage.values()].sort((left, right) => {
+    const leftOrder = PRICING_REASONING_ORDER.indexOf(left.substage);
+    const rightOrder = PRICING_REASONING_ORDER.indexOf(right.substage);
+    if (leftOrder !== -1 || rightOrder !== -1) {
+      return (leftOrder === -1 ? 999 : leftOrder) - (rightOrder === -1 ? 999 : rightOrder);
+    }
+    return String(left.timestamp || "").localeCompare(String(right.timestamp || ""));
+  });
+}
+
+function finalReasoningVerificationFromEvents(events) {
+  const event = [...events].reverse().find(
+    (item) =>
+      item?.substage === "final_reasoning_verification" ||
+      item?.metadata?.finalReasoningVerification,
+  );
+  if (!event) return null;
+  return event.metadata?.finalReasoningVerification || {
+    status: event.status,
+    summary: event.message,
+    model: event.metadata?.reasoningModel,
+    endpoint: event.metadata?.reasoningEndpoint,
+    tool: event.tool,
+  };
 }
 
 export function parseProgressLog(logPath) {
@@ -97,6 +295,20 @@ export function getRun(runId) {
     logPath,
     startedAt: run?.startedAt || events.find((event) => event.stage === "agent_start")?.timestamp || null,
     error: inferError(events),
+    fixtureMode: run?.fixtureMode || activeAgentRunFixture || null,
+    recoveryEnabled: false,
+    modelRouting: modelRoutingFromEvents(events, run?.modelRouting || defaultModelRouting()),
+    toolTrace: events.map((event) => ({
+      timestamp: event.timestamp,
+      stage: event.stage,
+      substage: event.substage || null,
+      tool: event.tool || event.called_skill || event.skill || null,
+      status: event.status,
+      message: event.message,
+      metadata: event.metadata || null,
+    })),
+    finalReasoningVerification: finalReasoningVerificationFromEvents(events),
+    pricingReasoningSteps: pricingReasoningStepsFromEvents(events),
     events,
   };
 }
@@ -117,6 +329,7 @@ export function getLatestRunForProperty(propertyId) {
 }
 
 export function startAgentRun(payload) {
+  assertAgentRunFixtureAllowed();
   fs.mkdirSync(runsDir, { recursive: true });
 
   if (!payload.accountId) {
@@ -136,9 +349,9 @@ export function startAgentRun(payload) {
   const runId = `pricing-workflow-${sanitize(runSubject)}-${now}`;
   const logPath = runLogPath(runId);
   const runnerScript =
-    agentRunFixture === "demo1"
+    activeAgentRunFixture === "demo1"
       ? "tests/demo1_airbnb_agent_fixture.py"
-      : agentRunFixture === "demo2"
+      : activeAgentRunFixture === "demo2"
         ? "tests/demo2_agent_fixture.py"
         : "tools/run_pricing_agent.py";
   const args = [
@@ -159,6 +372,14 @@ export function startAgentRun(payload) {
     ...(hotelScope ? ["--hotel-scope", hotelScope] : []),
     "--runtime-mode",
     runtimeMode,
+    "--model",
+    defaultToolModel,
+    "--trace-reasoning-model",
+    defaultTraceReasoningModel,
+    "--trace-reasoning-base-url",
+    defaultTraceReasoningEndpoint,
+    "--final-reasoning-model",
+    defaultReasoningModel,
     "--thinking",
     "medium",
     "--timeout-seconds",
@@ -190,6 +411,13 @@ export function startAgentRun(payload) {
     env: {
       ...process.env,
       REVNEST_WEBAPP_AGENT_RUN: "1",
+      REVNEST_TOOL_MODEL: defaultToolModel,
+      REVNEST_TOOL_MODEL_BASE_URL: defaultToolEndpoint,
+      REVNEST_TRACE_REASONING_MODEL: defaultTraceReasoningModel,
+      REVNEST_TRACE_REASONING_BASE_URL: defaultTraceReasoningEndpoint,
+      REVNEST_FINAL_REASONING_MODEL: defaultReasoningModel,
+      REVNEST_FINAL_REASONING_BASE_URL: defaultReasoningEndpoint,
+      REVNEST_TOOL_MODEL_TIMEOUT_SECONDS: defaultToolModelTimeoutSeconds,
     },
     detached: true,
     stdio: ["ignore", "ignore", "ignore"],
@@ -205,6 +433,8 @@ export function startAgentRun(payload) {
     propertyType,
     hotelScope,
     runtimeMode,
+    modelRouting: defaultModelRouting(),
+    fixtureMode: activeAgentRunFixture || null,
     logPath,
     process: child,
     status: "running",
@@ -227,6 +457,8 @@ export function startAgentRun(payload) {
     propertyIds: Array.isArray(payload.propertyIds) ? payload.propertyIds : [],
     hotelScope,
     runtimeMode,
+    modelRouting: defaultModelRouting(),
+    fixtureMode: activeAgentRunFixture || null,
     status: "running",
     logPath,
     startedAt: run.startedAt,
@@ -235,16 +467,29 @@ export function startAgentRun(payload) {
 
 export function stopAgentRun(runId) {
   const run = runs.get(runId);
-  if (!run?.process?.pid) {
-    return { runId, status: "stopped" };
+  const processGroups = new Set(processGroupsForRunId(runId));
+  if (run?.process?.pid) {
+    processGroups.add(run.process.pid);
   }
-  try {
-    process.kill(-run.process.pid, "SIGTERM");
-  } catch (error) {
-    if (error.code !== "ESRCH") throw error;
+
+  closeAgentBrowserSession(runId);
+
+  const signaledGroups = [];
+  for (const pgid of processGroups) {
+    if (signalProcessGroup(pgid, "SIGTERM")) {
+      signaledGroups.push(pgid);
+    }
   }
-  run.status = "stopped";
-  return { runId, status: "stopped" };
+  if (signaledGroups.length > 0) {
+    const killTimer = setTimeout(() => {
+      for (const pgid of signaledGroups) {
+        signalProcessGroup(pgid, "SIGKILL");
+      }
+    }, 3500);
+    if (typeof killTimer.unref === "function") killTimer.unref();
+  }
+  if (run) run.status = "stopped";
+  return { runId, status: "stopped", stoppedProcessGroups: signaledGroups };
 }
 
 export function stopAgentRunsForProperty(propertyId) {

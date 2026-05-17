@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRun, stopAgentRun } from "@/lib/agentRunStore";
+import { getRun, isHostRunProcessAlive, stopAgentRun } from "@/lib/agentRunStore";
 import { query } from "@/lib/db";
 import { getRevyThinkingStatus } from "../status/route";
 
@@ -21,7 +21,7 @@ async function findRunningRun(accountId, requestedRunId) {
     if (!runId) continue;
     if (requestedRunId && requestedRunId !== runId) continue;
     const run = getRun(runId);
-    if (run.status === "running") {
+    if (run.status === "running" || isHostRunProcessAlive(runId) || row.data?.agentRunStatus === "running") {
       return { runId, propertyId: row.id };
     }
   }

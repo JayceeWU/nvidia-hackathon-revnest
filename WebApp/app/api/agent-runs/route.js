@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { getLatestRunForProperty, getRun, startAgentRun } from "@/lib/agentRunStore";
+import { getLatestRunForProperty, getRun, startAgentRun, stopAgentRun } from "@/lib/agentRunStore";
 
 export const runtime = "nodejs";
 
@@ -40,6 +40,7 @@ function normalizeConversationId(payload) {
 
 function normalizeRuntimeMode(value, propertyType) {
   if (propertyType === "airbnb") return "host-openclaw";
+  if (propertyType === "hotel") return "nemoclaw";
   const normalized = String(value || "").trim().toLowerCase();
   const allowed = new Set(["split-demo", "auto", "host-openclaw", "nemoclaw"]);
   if (allowed.has(normalized)) return normalized;
@@ -75,6 +76,20 @@ function runningRunForProperties(properties) {
     if (run.status === "running") return run;
   }
   return null;
+}
+
+async function getSinglePropertyForRun(accountId, propertyId) {
+  const result = await query(
+    `
+      SELECT id, data
+      FROM property
+      WHERE id = $1
+        AND account_id = $2::uuid
+      LIMIT 1
+    `,
+    [propertyId, accountId],
+  );
+  return result.rows[0] || null;
 }
 
 export async function GET(request) {
@@ -121,6 +136,7 @@ export async function POST(request) {
 
   try {
     let batchPropertyIds = [];
+    let singleProperty = null;
     if (hotelScope === "all-room-types") {
       const roomTypeProperties = await getHotelRoomTypeProperties(payload.accountId);
       if (roomTypeProperties.length === 0) {
@@ -131,6 +147,18 @@ export async function POST(request) {
         return NextResponse.json({ error: "A Revy run is already active for this hotel account", run: runningRun }, { status: 409 });
       }
       batchPropertyIds = roomTypeProperties.map((row) => row.id);
+    } else if (payload.propertyId) {
+      singleProperty = await getSinglePropertyForRun(payload.accountId, payload.propertyId);
+      if (!singleProperty) {
+        return NextResponse.json(
+          { error: `Property ${payload.propertyId} was not found for this account. Save the property before starting Revy.` },
+          { status: 404 },
+        );
+      }
+      const runningRun = runningRunForProperties([singleProperty]);
+      if (runningRun) {
+        return NextResponse.json({ error: "A Revy run is already active for this property", run: runningRun }, { status: 409 });
+      }
     }
 
     const run = startAgentRun({
@@ -151,7 +179,7 @@ export async function POST(request) {
       await query(
         `
           UPDATE property
-          SET data = data || $3::jsonb,
+          SET data = data - 'agentRunError' - 'pricingOutputError' - 'agentRunStopReason' - 'agentRunFinishedAt' || $3::jsonb,
               updated_at = now()
           WHERE account_id = $1::uuid
             AND id = ANY($2::text[])
@@ -170,14 +198,15 @@ export async function POST(request) {
         ],
       );
     } else if (payload.propertyId) {
-      await query(
+      const updateResult = await query(
         `
           UPDATE property
-          SET data = data || $3::jsonb,
+          SET data = data - 'agentRunError' - 'pricingOutputError' - 'agentRunStopReason' - 'agentRunFinishedAt' || $3::jsonb,
               my_place = COALESCE($4, my_place),
               updated_at = now()
           WHERE id = $1
             AND account_id = $2::uuid
+          RETURNING id
         `,
         [
           payload.propertyId,
@@ -194,6 +223,13 @@ export async function POST(request) {
           myPlace || null,
         ]
       );
+      if (updateResult.rowCount === 0) {
+        stopAgentRun(run.runId);
+        return NextResponse.json(
+          { error: `Property ${payload.propertyId} was not found for this account. Revy run was not started.` },
+          { status: 404 },
+        );
+      }
     }
     return NextResponse.json(run);
   } catch (error) {

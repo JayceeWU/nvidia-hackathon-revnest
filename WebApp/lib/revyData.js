@@ -1,6 +1,6 @@
 import { query } from "@/lib/db";
 
-const DEFAULT_MODEL = "nemotron3:33b";
+const DEFAULT_MODEL = "qwen tool calls + Nemotron reasoning";
 
 export function defaultRevyState() {
   return {
@@ -59,9 +59,7 @@ function messagesFromConversationData(data, row) {
 export function formatRevyConversation(row) {
   const data = objectFrom(row.data) || {};
   const conversationId = data.conversationId || row.id;
-  const traceEvents = arrayFrom(data.traceEvents || data.events);
   const priceCalendar = arrayFrom(data.priceCalendar || data.price_calendar);
-  const reasoningSteps = arrayFrom(row.reasoningSteps);
   return {
     id: row.id,
     conversationId,
@@ -78,61 +76,21 @@ export function formatRevyConversation(row) {
     priceDateRange: objectFrom(data.priceDateRange) || null,
     revparSummary: objectFrom(data.revparSummary) || null,
     priceCalendar,
-    traceEvents,
-    reasoningSteps,
+    traceEvents: [],
+    reasoningSteps: [],
   };
 }
 
-function formatReasoningStep(row) {
-  const data = objectFrom(row.data) || {};
-  return {
-    id: row.id,
-    runId: data.runId || null,
-    propertyId: data.propertyId || null,
-    stage: data.stage || null,
-    substage: data.substage || null,
-    groupKey: data.groupKey || null,
-    summary: data.summary || "",
-    facts: arrayFrom(data.facts),
-    metrics: objectFrom(data.metrics) || {},
-    tool: data.tool || null,
-    sources: arrayFrom(data.sources),
-    confidence: data.confidence || null,
-    timestamp: isoValue(data.timestamp || row.createdAt),
-    updatedAt: isoValue(row.updatedAt),
-  };
-}
-
-function reasoningStepsForConversation(conversationRow, reasoningSteps) {
-  const data = objectFrom(conversationRow.data) || {};
-  const runId = data.runId || null;
-  const propertyId = conversationRow.propertyId || data.propertyId || null;
-  const matched = reasoningSteps.filter((step) => {
-    if (runId && step.runId === runId) return true;
-    if (!runId && propertyId && step.propertyId === propertyId) return true;
-    return false;
-  });
-  return matched.sort((left, right) => {
-    const leftTime = left.timestamp || "";
-    const rightTime = right.timestamp || "";
-    if (leftTime !== rightTime) return leftTime.localeCompare(rightTime);
-    return String(left.id).localeCompare(String(right.id));
-  });
-}
-
-function buildRevision(stateRow, conversationRows, reasoningRows) {
+function buildRevision(stateRow, conversationRows) {
   const stateUpdatedAt = isoValue(stateRow?.updatedAt) || "no-state";
   const conversationRevision = conversationRows
     .map((row) => `${row.id}:${isoValue(row.updatedAt) || ""}:${isoValue(row.finalMessageAt) || ""}`)
     .join("|");
-  const reasoningRevision = reasoningRows
-    .map((row) => `${row.id}:${isoValue(row.updatedAt) || ""}`)
-    .join("|");
-  return `${stateUpdatedAt}:${conversationRevision}:${reasoningRevision}`;
+  return `${stateUpdatedAt}:${conversationRevision}`;
 }
 
 export async function getRevyData({ accountId, propertyId = null }) {
-  const [stateResult, conversationResult, reasoningResult] = await Promise.all([
+  const [stateResult, conversationResult] = await Promise.all([
     query(
       `
         SELECT data, updated_at AS "updatedAt"
@@ -159,43 +117,21 @@ export async function getRevyData({ accountId, propertyId = null }) {
       `,
       [accountId, propertyId || null],
     ),
-    query(
-      `
-        SELECT
-          id,
-          data,
-          created_at AS "createdAt",
-          updated_at AS "updatedAt"
-        FROM pricing_record
-        WHERE account_id = $1::uuid
-          AND record_type = 'reasoning_step'
-          AND ($2::text IS NULL OR data->>'propertyId' = $2)
-        ORDER BY COALESCE(data->>'timestamp', created_at::text), created_at, id
-      `,
-      [accountId, propertyId || null],
-    ),
   ]);
 
   const stateRow = stateResult.rows[0] || null;
-  const reasoningSteps = reasoningResult.rows.map(formatReasoningStep);
-  const conversations = conversationResult.rows.map((row) =>
-    formatRevyConversation({
-      ...row,
-      reasoningSteps: reasoningStepsForConversation(row, reasoningSteps),
-    }),
-  );
+  const conversations = conversationResult.rows.map(formatRevyConversation);
   return {
     state: stateRow?.data || defaultRevyState(),
     conversations,
-    revision: buildRevision(stateRow, conversationResult.rows, reasoningResult.rows),
+    revision: buildRevision(stateRow, conversationResult.rows),
     source: {
       conversations: "postgres.revy_conversation",
-      reasoningSteps: "postgres.pricing_record",
       state: "postgres.revy_state",
     },
     counts: {
       conversations: conversations.length,
-      reasoningSteps: reasoningSteps.length,
+      reasoningSteps: 0,
     },
   };
 }

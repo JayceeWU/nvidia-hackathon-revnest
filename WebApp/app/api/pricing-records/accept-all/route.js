@@ -1,52 +1,9 @@
 import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
-import { syncAcceptedPricesToMockHotel } from "@/lib/mockHotelSync";
-import { approvalActor, requireAccountSession } from "@/lib/serverSession";
+import { writeAcceptedPendingTaskPriceLogs } from "@/lib/pricingRecords";
+import { requireAccountSession } from "@/lib/serverSession";
 
 export const runtime = "nodejs";
-
-function taskPriceDirection(task) {
-  const direction = task.priceDirection || task.changeType || task.price_direction || task.type;
-  return direction === "Increase" || direction === "Decrease" ? direction : null;
-}
-
-function buildAcceptedLog(task, index, session) {
-  const now = Date.now();
-  const acceptedAt = new Date().toISOString();
-  const priceDirection = taskPriceDirection(task);
-  const pendingTaskType = task.taskType || task.classification || null;
-  const pendingTaskTypeLabel = task.taskTypeLabel || task.classificationLabel || null;
-  return {
-    id: `log-accepted-${now}-${index}`,
-    propertyId: task.propertyId || task.property_id || null,
-    property: task.property,
-    priceDate: task.priceDate,
-    type: priceDirection || task.type,
-    priceDirection,
-    pendingTaskType,
-    pendingTaskTypeLabel,
-    taskTypeDescription: task.taskTypeDescription || task.classificationDescription || null,
-    approvalGateLabel: task.approvalGateLabel || null,
-    oldPrice: task.currentPrice,
-    newPrice: task.agentSuggestedPrice,
-    agentSuggestedPrice: task.agentSuggestedPrice,
-    change: task.change,
-    agentSuggestedAt: task.agentSuggestedAt,
-    adjustedAt: acceptedAt,
-    acceptedAt,
-    acceptedBy: approvalActor(session),
-    approvalSource: "webapp_accept_button",
-    classification: task.classification || null,
-    classificationLabel: task.classificationLabel || null,
-    classificationDescription: task.classificationDescription || task.taskTypeDescription || null,
-    approvalRequirement: task.approvalRequirement || null,
-    strategyRange: task.strategyRange || null,
-    reviewDrivers: Array.isArray(task.reviewDrivers) ? task.reviewDrivers : [],
-    reviewReason: task.reviewReason || null,
-    reason: `${task.reason} Accepted through Accept all.`,
-    agentSignals: ["Pending task accepted", "Host guardrails checked", "Final price confirmed by user"],
-  };
-}
 
 export async function POST(request) {
   const { accountId } = await request.json();
@@ -76,26 +33,14 @@ export async function POST(request) {
       [accountId]
     );
 
-    const accountType = taskResult.rows[0]?.account_type;
-    const logs = taskResult.rows.map((row, index) => buildAcceptedLog(row.data, index, auth.session));
-    let mockHotelSync = null;
-
-    if (accountType === "hotel" && logs.length > 0) {
-      mockHotelSync = await syncAcceptedPricesToMockHotel(logs);
-    }
-    for (const log of logs) {
-      log.mockHotelSync = mockHotelSync;
-    }
-
-    for (const log of logs) {
-      await client.query(
-        `
-          INSERT INTO pricing_record (id, account_id, record_type, data)
-          VALUES ($1, $2::uuid, 'price_log', $3::jsonb)
-        `,
-        [log.id, accountId, JSON.stringify(log)]
-      );
-    }
+    const { logs, mockHotelSync } = await writeAcceptedPendingTaskPriceLogs({
+      client,
+      accountId,
+      taskRows: taskResult.rows,
+      session: auth.session,
+      approvalSource: "webapp_accept_all_button",
+      acceptAll: true,
+    });
 
     await client.query(
       `

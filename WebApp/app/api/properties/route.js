@@ -178,7 +178,7 @@ export async function POST(request) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(
+    const saveResult = await client.query(
       `
         INSERT INTO property (
           id, account_id, min_price_cents, max_price_cents, pricing_horizon, my_place,
@@ -224,6 +224,10 @@ export async function POST(request) {
       ]
     );
 
+    if (saveResult.rowCount === 0) {
+      throw new Error("This property id already belongs to another account. Start a fresh add-property flow and try again.");
+    }
+
     await client.query("DELETE FROM property_price WHERE property_id = $1", [property.id]);
 
     if (forecast.length > 0) {
@@ -247,7 +251,8 @@ export async function POST(request) {
     return NextResponse.json({ property: { ...propertyData, id: property.id, forecast } });
   } catch (error) {
     await client.query("ROLLBACK");
-    return NextResponse.json({ error: error.message || "Failed to save property" }, { status: 500 });
+    const status = String(error.message || "").includes("already belongs to another account") ? 409 : 500;
+    return NextResponse.json({ error: error.message || "Failed to save property" }, { status });
   } finally {
     client.release();
   }

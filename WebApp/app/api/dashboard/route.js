@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLatestRunForProperty, getRun } from "@/lib/agentRunStore";
+import { getLatestRunForProperty, getRun, isHostRunProcessAlive } from "@/lib/agentRunStore";
 import { query } from "@/lib/db";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -14,6 +14,25 @@ function toDollars(cents) {
 
 function formatForecastDate(value) {
   return dateFormatter.format(new Date(value));
+}
+
+function pricingOutputError(row, forecast, activeAgentRunId, agentRunStatus) {
+  if (row.data.agentRunError || row.data.pricingOutputError) {
+    return row.data.agentRunError || row.data.pricingOutputError;
+  }
+  if (activeAgentRunId || forecast.length > 0) return null;
+  if (agentRunStatus === "completed") {
+    return "Revy completed, but no suggested prices were saved for this property.";
+  }
+  if (agentRunStatus === "failed") {
+    return "Revy failed before suggested prices were saved for this property.";
+  }
+  if (agentRunStatus === "stopped") {
+    return row.data.agentRunStopReason === "stale_no_host_process"
+      ? "Revy stopped unexpectedly before suggested prices were saved for this property."
+      : "Revy stopped before suggested prices were saved for this property.";
+  }
+  return null;
 }
 
 export async function GET(request) {
@@ -78,8 +97,20 @@ export async function GET(request) {
   const properties = propertyResult.rows.map((row) => {
     const savedRun = row.data.activeAgentRunId ? getRun(row.data.activeAgentRunId) : null;
     const runtimeRun = getLatestRunForProperty(row.id) || savedRun;
+    const runtimeIsRunning = runtimeRun?.status === "running";
+    const savedRunIsAlive = row.data.activeAgentRunId ? isHostRunProcessAlive(row.data.activeAgentRunId) : false;
+    const activeAgentRunId = runtimeIsRunning
+      ? runtimeRun.runId
+      : savedRunIsAlive
+        ? row.data.activeAgentRunId
+        : null;
     const runtimeStatus = runtimeRun?.status && runtimeRun.status !== "unknown" ? runtimeRun.status : null;
-    const savedStatus = row.data.agentRunStatus === "running" && !runtimeStatus ? null : row.data.agentRunStatus;
+    const savedStatus = row.data.agentRunStatus === "running" && !activeAgentRunId ? null : row.data.agentRunStatus;
+    const forecast = forecastByProperty.get(row.id) || row.data.forecast || [];
+    let agentRunStatus = activeAgentRunId ? "running" : runtimeStatus || savedStatus || null;
+    if (!activeAgentRunId && agentRunStatus === "stopped" && forecast.length > 0) {
+      agentRunStatus = "completed";
+    }
     return {
       ...row.data,
       id: row.id,
@@ -100,9 +131,10 @@ export async function GET(request) {
       bath: row.bath || row.data.bath || row.data.bathroom || null,
       bathroom: row.data.bathroom || row.bath || null,
       otherInfo: row.other_info || row.data.otherInfo || row.data.other_info || null,
-      activeAgentRunId: runtimeRun?.runId || row.data.activeAgentRunId || null,
-      agentRunStatus: runtimeStatus || savedStatus || null,
-      forecast: forecastByProperty.get(row.id) || row.data.forecast || [],
+      activeAgentRunId,
+      agentRunStatus,
+      forecast,
+      pricingOutputError: pricingOutputError(row, forecast, activeAgentRunId, agentRunStatus),
     };
   });
 
@@ -110,7 +142,7 @@ export async function GET(request) {
   const priceLogs = [];
   for (const row of recordResult.rows) {
     if (row.record_type === "pending_task") {
-      pendingTasks.push(row.data);
+      pendingTasks.push({ ...row.data, id: row.id, taskDataId: row.data?.id || null });
     } else if (row.record_type === "price_log") {
       priceLogs.push(row.data);
     }

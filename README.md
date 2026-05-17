@@ -77,7 +77,7 @@ Important paths:
 - `Claw/tools/run_parallel_market_data.py` - parallel market-data fan-out.
 - `Claw/tools/revpar_estimate.py` - forecast and conversation write-back.
 - `Claw/tools/progress_logger.py` - JSONL progress events for WebApp.
-- `Claw/data/sql/` - dashboard schema and seed data.
+- `Claw/data/sql/` - dashboard schema, empty dev seed, and test/demo seed data.
 - `Claw/skills/` - pricing workflow skills.
 - `Claw/nemoclaw/` - sandbox policies and demo notes.
 - `Claw/tests/` - local smoke and consistency tests.
@@ -89,6 +89,7 @@ RevNest runs three local surfaces:
 - WebApp dashboard: `http://localhost:3000`
 - MockHotel PMS: `http://localhost:3001`
 - Claw PostgreSQL: `postgres://postgres:postgres@localhost:55434/dev`
+- Claw test PostgreSQL: `postgres://postgres:postgres@localhost:55434/test`
 - MockHotel PostgreSQL: `postgres://postgres:postgres@localhost:55432/dev`
 
 Both Next.js apps bind to `0.0.0.0` in their npm scripts so they can be reached
@@ -230,14 +231,27 @@ Useful Claw variables live in `Claw/.env`:
 
 ```text
 CLAW_DATABASE_URL=postgres://postgres:postgres@localhost:55434/dev
+CLAW_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:55434/test
 SERPAPI_API_KEY=<optional>
 TAVILY_API_KEY=<optional>
 TICKETMASTER_API_KEY=<optional>
 MOCKHOTEL_AGENT_TOKEN=<same-shared-read-token>
-REVNEST_NEMOCLAW_SANDBOX=my-assistant
+REVNEST_NEMOCLAW_SANDBOX=revnest-judge
+REVNEST_TOOL_MODEL=ollama-local/qwen3.6:35b
+REVNEST_TOOL_MODEL_BASE_URL=http://127.0.0.1:11434/v1
+REVNEST_TRACE_REASONING_MODEL=nemotron3:33b
+REVNEST_TRACE_REASONING_BASE_URL=http://127.0.0.1:11434/v1
+REVNEST_FINAL_REASONING_MODEL=nemotron-3-super:latest
+REVNEST_FINAL_REASONING_BASE_URL=http://127.0.0.1:11434/v1
 ```
 
 Do not paste API keys into prompts or commit them to the repository.
+
+Model routing is deliberately split: qwen is the OpenClaw tool-calling
+orchestrator. Fast WebApp trace steps are first emitted from observable source
+facts (`source_fact_trace`) so the demo does not block on a large model; optional
+substage refinement uses the trace Nemotron model; the final verifier before
+publish still uses the stronger Nemotron model.
 
 ## Common Workflows
 
@@ -297,9 +311,10 @@ mutate MockHotel prices. WebApp's human approval flow owns live PMS sync.
 
 For the hackathon demo, keep the runtime split deliberately simple:
 
-- Hotel / MockHotel Safe PMS path: run through NemoClaw `my-assistant` with
-  `revnest-safe-pms` active. This is the primary live path for judging because
-  it proves policy-enforced safety.
+- Hotel / MockHotel Safe PMS path: run through NemoClaw `revnest-judge` with
+  only `revnest-judge-minimal` active. This is the primary live path for
+  judging because it proves policy-enforced safety with a least-privilege
+  sandbox.
 - Airbnb external-web path: run through host OpenClaw. Airbnb browsing is useful
   as an extension, but it is not the primary NemoClaw safety demo because the
   current sandbox network/proxy path can block Airbnb.
@@ -313,18 +328,27 @@ python3 Claw/tools/run_pricing_agent.py --runtime-mode nemoclaw ...
 python3 Claw/tools/run_pricing_agent.py --runtime-mode host-openclaw ...
 ```
 
-For experimental Airbnb-in-NemoClaw browser reads, apply the project
-browser-read policy before running the workflow:
+### Judge NemoClaw Sandbox
+
+For the NemoClaw track, use a fresh or reset judge sandbox with only the minimal
+RevNest judge policy active:
 
 ```bash
-/home/asus/revnest/Claw/nemoclaw/apply_airbnb_browser_access.sh my-assistant
+/home/asus/revnest/Claw/nemoclaw/prepare_judge_minimal_sandbox.sh revnest-judge
 ```
 
-This allows the sandbox browser to read Airbnb listing pages and Airbnb static
-assets through OpenShell without opening unrestricted outbound internet access.
-The script also configures Chromium to use the OpenShell proxy, pins the few
-Airbnb hostnames needed by OpenClaw's navigation guard, and restarts the
-sandbox browser.
+The judge policy allows local or NVIDIA inference plus read-only MockHotel PMS
+inspection. It intentionally excludes Airbnb, npm, PyPI, Homebrew, Discord,
+WebApp accept APIs, MockHotel write APIs, and MockHotel database ports. The
+expected `policy-list` evidence should show only `revnest-judge-minimal` active
+for the RevNest safety story.
+
+### Experimental Airbnb In NemoClaw
+
+`Claw/nemoclaw/revnest-airbnb-browser.yaml` and
+`Claw/nemoclaw/apply_airbnb_browser_access.sh` are retained only for future
+experiments. Do not use them for NemoClaw judging. The judge demo uses host
+OpenClaw for Airbnb and NemoClaw only for the hotel Safe PMS path.
 
 ## Data Flow
 
@@ -366,6 +390,10 @@ docker compose -f Claw/data/docker-compose.yml down -v
 docker compose -f Claw/data/docker-compose.yml up -d
 ```
 
+The Claw `dev` database is initialized with schema only. The same container also
+creates a seeded `test` database from `Claw/data/sql/test.sql` for smoke tests
+and demo fixtures.
+
 For MockHotel:
 
 ```bash
@@ -394,19 +422,27 @@ npm --prefix MockHotel run build
 Claw smoke tests:
 
 ```bash
+export CLAW_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:55434/test
 python3 Claw/tests/run_strategy_rag_gate_tests.py
 python3 Claw/tests/run_hotel_seed_consistency_tests.py
-python3 Claw/tests/run_safe_pms_evidence_chain_demo.py
+python3 Claw/tests/run_submission_state_checks.py
 python3 Claw/tests/run_demo1_airbnb_e2e.py
 python3 Claw/tests/run_demo2_hotel_e2e.py
 ```
 
+NemoClaw judge evidence:
+
+```bash
+/home/asus/revnest/Claw/nemoclaw/prepare_judge_minimal_sandbox.sh revnest-judge
+python3 Claw/tests/run_safe_pms_evidence_chain_demo.py
+```
+
 The Demo1 and Demo2 e2e tests start a temporary WebApp production server and use
-deterministic agent fixtures by default. Demo1 verifies Airbnb login, default
-add-property data, OpenClaw run launch, completed run status, and the new
-property appearing in My Properties. Demo2 verifies the hotel batch pricing
-flow, generated pending task, Discord notification, Discord prompt approval
-routing through WebApp Accept, and MockHotel database update only after approval.
+deterministic agent fixtures by default. Demo1 is product/OpenClaw validation
+for the Airbnb path, not NemoClaw safety evidence. Demo2 verifies the hotel
+batch pricing flow, generated pending task, Discord notification, Discord prompt
+approval routing through WebApp Accept, and MockHotel database update only after
+approval.
 
 To exercise real OpenClaw/NemoClaw runs instead, start WebApp yourself and run:
 
@@ -415,9 +451,46 @@ python3 Claw/tests/run_demo1_airbnb_e2e.py --live-agent --no-start-webapp --weba
 python3 Claw/tests/run_demo2_hotel_e2e.py --live-agent --no-start-webapp --webapp-url http://localhost:3000 --timeout-seconds 1800 --skip-discord-check
 ```
 
-The default Demo2 fixture run injects a local `DISCORD_WEBHOOK_URL` capture
-server. For externally managed live-agent runs, start WebApp with your own
-Discord test webhook if you want to inspect the live notification path.
+The live Demo1 command remains host OpenClaw. The live Demo2 command is the
+hotel NemoClaw path to use for judge-facing safety proof; start WebApp with
+`REVNEST_NEMOCLAW_SANDBOX=revnest-judge` for that run. The default Demo2 fixture
+run injects a local `DISCORD_WEBHOOK_URL` capture server. For externally managed
+live-agent runs, start WebApp with your own Discord test webhook if you want to
+inspect the live notification path.
+
+### Discord Inbound Revy
+
+RevNest now has an inbound Discord route at `WebApp/app/api/discord/revy/route.js`.
+Use it in one of two ways:
+
+- Discord Interactions: expose `https://<your-webapp>/api/discord/revy` and set
+  `DISCORD_PUBLIC_KEY` (or `REVNEST_DISCORD_PUBLIC_KEY`) in WebApp. The route
+  answers Discord ping verification and slash-command payloads. A `/revy`
+  command with a `message` option can ask “who are you”, “status”, or
+  “run hotel pricing”.
+- Trusted relay: POST message JSON to `/api/discord/revy` with
+  `Authorization: Bearer $REVNEST_DISCORD_INBOUND_TOKEN`. This is useful if a
+  separate Discord bot/gateway forwards `MESSAGE_CREATE` events.
+
+For local hackathon demo routing, set:
+
+```text
+REVNEST_DISCORD_ACCOUNT_ID=00000000-0000-0000-0000-000000000103
+REVNEST_DISCORD_INBOUND_TOKEN=<shared relay token, if not using Discord signatures>
+DISCORD_PUBLIC_KEY=<Discord application public key, for Interactions>
+```
+
+Identity questions are answered directly from the RevNest/Revy contract, so
+“你是谁” returns Revy as the RevNest hotel revenue management agent. Hotel
+pricing commands start the same `agent-runs` path used by WebApp, including the
+hotel all-room-types workflow, NemoClaw split-demo routing, pricing reasoning
+trace, and WebApp human approval boundary for MockHotel PMS writes.
+
+If you use OpenClaw chat channels directly instead of the WebApp route, run
+`/home/asus/run_openclaw.sh`. That launcher now sets OpenClaw’s default workspace
+to `/home/asus/revnest/Claw` and registers the Discord channel from
+`DISCORD_BOT_TOKEN` when the token is present. Without `DISCORD_BOT_TOKEN`,
+`openclaw channels list` will still show no Discord channel.
 
 Useful tool checks:
 
@@ -437,14 +510,15 @@ npm script or environment.
 
 ### WebApp Cannot Log In
 
-Make sure the Claw database is running on port `55434` and has been initialized
-from `Claw/data/sql/schema.sql` and `Claw/data/sql/data.sql`.
+Make sure the Claw database is running on port `55434`. The default `dev`
+database is schema-only; use the seeded `test` database or create an account row
+when you need demo logins.
 
 ### Hotel Room Types Do Not Appear
 
 Sign in with `hotel@revnest.ai`, then confirm the Claw `property` table contains
 rows where `data->>'propertyType' = 'Hotel Room Type'`. If you recently edited
-seed SQL, reseed the Claw database.
+seed SQL, reseed the Claw test database from `Claw/data/sql/test.sql`.
 
 ### Agent Run Starts But UI Does Not Update
 
@@ -464,3 +538,5 @@ API requires a bearer token when fetching current PMS prices.
 - `Claw/BOOTSTRAP.md` - Revy runtime operating contract.
 - `Claw/nemoclaw/SAFE_PMS_APPROVAL_DEMO.md` - safe PMS demo notes.
 - `Claw/nemoclaw/revnest-safe-pms.yaml` - NemoClaw policy for MockHotel safety.
+- `Claw/nemoclaw/revnest-judge-minimal.yaml` - least-privilege judge policy for NemoClaw evidence.
+- `Claw/nemoclaw/prepare_judge_minimal_sandbox.sh` - applies and verifies the judge sandbox policy.

@@ -40,6 +40,83 @@ const ACTIVE_STATUSES = new Set(["started", "running", "info"]);
 const DONE_STATUSES = new Set(["completed", "skipped"]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "skipped", "stopped"]);
 const LIVE_RUN_STATUSES = new Set(["running", "started"]);
+const PRICING_REASONING_ORDER = [
+  "supply_snapshot",
+  "demand_snapshot",
+  "supply_demand_synthesis",
+  "occupancy_result",
+  "guardrail_check",
+  "calculator_run",
+  "final_calendar",
+  "final_reasoning_verification",
+];
+
+function objectFrom(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function pricingReasoningRank(event) {
+  const metadata = objectFrom(event?.metadata);
+  const status = event?.status || "info";
+  let rank = 0;
+  if (status === "started") rank = 1;
+  else if (status === "failed") rank = 2;
+  else if (status === "info" || status === "completed" || status === "skipped") rank = 3;
+  if (metadata.reasoningEngine === "source_fact_trace") rank += 1;
+  if (metadata.reasoningEngine === "nemotron") rank += 2;
+  if (metadata.finalReasoningVerification) rank += 3;
+  return rank;
+}
+
+function arrayFrom(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function labelizeSubstage(value) {
+  return String(value || "reasoning step")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function isPricingReasoningEvent(event) {
+  return event?.stage === "pricing_decision" && Boolean(event.substage);
+}
+
+function reasoningFromEvents(events) {
+  const bySubstage = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!isPricingReasoningEvent(event)) continue;
+    const metadata = objectFrom(event.metadata);
+    const finalVerification = objectFrom(metadata.finalReasoningVerification);
+    const next = {
+      id: `${event.timestamp || "event"}-${event.substage}`,
+      timestamp: event.timestamp || null,
+      substage: event.substage,
+      label: labelizeSubstage(event.substage),
+      status: event.status || "info",
+      summary: event.message || finalVerification.summary || "",
+      facts: arrayFrom(metadata.facts),
+      metrics: objectFrom(metadata.metrics || finalVerification.checked),
+      sources: arrayFrom(metadata.sources),
+      confidence: metadata.confidence || null,
+      engine: metadata.reasoningEngine || null,
+      model: metadata.reasoningModel || finalVerification.model || null,
+      tool: event.tool || event.called_skill || event.skill || finalVerification.tool || null,
+      rank: pricingReasoningRank(event),
+    };
+    const existing = bySubstage.get(event.substage);
+    if (!existing || next.rank >= existing.rank) {
+      bySubstage.set(event.substage, next);
+    }
+  }
+  return [...bySubstage.values()].sort((left, right) => {
+    const leftOrder = PRICING_REASONING_ORDER.indexOf(left.substage);
+    const rightOrder = PRICING_REASONING_ORDER.indexOf(right.substage);
+    return (leftOrder === -1 ? 999 : leftOrder) - (rightOrder === -1 ? 999 : rightOrder);
+  });
+}
 
 function eventIdentity(event) {
   if (event.stage === "agent_start" || event.stage === "agent_finish") {
@@ -120,12 +197,31 @@ function statusClass(status) {
   return "neutral";
 }
 
+function friendlyError(error) {
+  const text = String(error || "").trim();
+  if (!text) return "Revy could not complete this run.";
+  const lower = text.toLowerCase();
+  if (lower.includes("llm request failed") && lower.includes("connection error")) {
+    if (lower.includes("timeout")) {
+      return "Local model request timed out before Revy received a response. The model may still be warming up.";
+    }
+    return "Local model connection failed while Revy was waiting for a response.";
+  }
+  if (lower.includes("openclaw request timeout")) {
+    return "OpenClaw timed out before Revy could write workflow progress.";
+  }
+  if (lower.includes("model idle timeout")) {
+    return "The local model went idle before Revy produced workflow progress.";
+  }
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+}
+
 function eventSummary(event, fallback) {
   if (!event) return fallback;
   if (event.status === "failed" && event.error) {
-    return `${event.error} Please try Run Revy again.`;
+    return `${friendlyError(event.error)} Please try Run Revy again.`;
   }
-  return event.message || event.error || fallback;
+  return event.message || (event.error ? friendlyError(event.error) : fallback);
 }
 
 export default function AgentRunPanels({
@@ -133,9 +229,27 @@ export default function AgentRunPanels({
   emptyMessage = "Waiting for the first progress event...",
   runStatus = "idle",
   startedAt = null,
+  runError = "",
+  modelRouting = null,
+  finalReasoningVerification = null,
+  pricingReasoningSteps = null,
 }) {
   const [now, setNow] = useState(() => Date.now());
-  const visibleEvents = useMemo(() => compactEvents(events), [events]);
+  const consoleEvents = useMemo(() => (Array.isArray(events) ? events.filter((event) => !isPricingReasoningEvent(event)) : []), [events]);
+  const visibleEvents = useMemo(() => compactEvents(consoleEvents), [consoleEvents]);
+  const reasoningSteps = useMemo(() => {
+    if (Array.isArray(pricingReasoningSteps) && pricingReasoningSteps.length > 0) {
+      return pricingReasoningSteps;
+    }
+    return reasoningFromEvents(events);
+  }, [events, pricingReasoningSteps]);
+  const completedCoreReasoning = reasoningSteps.filter(
+    (step) => PRICING_REASONING_ORDER.includes(step.substage) && !["started", "failed"].includes(step.status),
+  ).length;
+  const visibleCoreReasoning = reasoningSteps.filter((step) => PRICING_REASONING_ORDER.includes(step.substage)).length;
+  const hasPricingReasoningBlock = Boolean(finalReasoningVerification) || reasoningSteps.length > 0;
+  const pricingReasoningAnchorIndex = visibleEvents.findIndex((event) => event.stage === "pricing_decision");
+  const pricingReasoningInsertIndex = pricingReasoningAnchorIndex >= 0 ? pricingReasoningAnchorIndex : visibleEvents.length - 1;
   const latestEvent = visibleEvents[visibleEvents.length - 1] || null;
   const firstTimestamp = parseTime(startedAt) || parseTime(visibleEvents[0]?.timestamp);
   const lastTimestamp = parseTime(latestEvent?.completedAt || latestEvent?.timestamp);
@@ -143,13 +257,71 @@ export default function AgentRunPanels({
   const isActiveRun = LIVE_RUN_STATUSES.has(runStatus);
   const elapsedSeconds = firstTimestamp ? ((isActiveRun ? now : lastTimestamp || now) - firstTimestamp) / 1000 : 0;
   const workLabel = firstTimestamp && (isActiveRun || isTerminalRun) ? `Worked for ${formatDuration(elapsedSeconds)}` : "Ready";
-  const latestSummary = eventSummary(latestEvent, emptyMessage);
+  const latestSummary = runError && (runStatus === "failed" || runStatus === "stopped")
+    ? friendlyError(runError)
+    : eventSummary(latestEvent, emptyMessage);
 
   useEffect(() => {
     if (!isActiveRun) return undefined;
     const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, [isActiveRun]);
+
+  const finalVerifierLine = finalReasoningVerification ? (
+    <div className={`console-line ${finalReasoningVerification.status === "approved" ? "done" : "neutral"}`}>
+      <span className="console-marker">
+        {finalReasoningVerification.status === "approved" ? (
+          <CheckIcon width={12} height={12} />
+        ) : (
+          <StepIcon name="skill" width={12} height={12} />
+        )}
+      </span>
+      <span className="console-step">
+        <code>final verifier</code>
+        <small>{finalReasoningVerification.model || modelRouting?.reasoningModel || "Nemotron"}</small>
+      </span>
+      <span className="console-text">{finalReasoningVerification.summary || finalReasoningVerification.status}</span>
+    </div>
+  ) : null;
+
+  const pricingReasoningBlock = hasPricingReasoningBlock ? (
+    <>
+      {reasoningSteps.length > 0 ? (
+        <div className="pricing-reasoning-console" aria-label="Pricing reasoning timeline">
+          <div className="pricing-reasoning-console-head">
+            <strong>Pricing reasoning</strong>
+            <span>
+              {completedCoreReasoning}/{PRICING_REASONING_ORDER.length} core complete
+              {visibleCoreReasoning > completedCoreReasoning ? ` · ${visibleCoreReasoning} visible` : ""}
+            </span>
+          </div>
+          {reasoningSteps.map((step, index) => (
+            <div
+              key={step.id || `${step.substage}-${index}`}
+              className={`console-line agent-event-line reasoning-event-line ${statusClass(step.status)}`}
+            >
+              <span className="console-marker">
+                {DONE_STATUSES.has(step.status) ? (
+                  <CheckIcon width={12} height={12} />
+                ) : ACTIVE_STATUSES.has(step.status) ? (
+                  <span className="loading-dot" />
+                ) : (
+                  <StepIcon name="skill" width={12} height={12} />
+                )}
+              </span>
+              <span className="console-step">
+                <code>{step.label || labelizeSubstage(step.substage)}</code>
+              </span>
+              <span className="console-text reasoning-console-text">
+                <span>{step.summary}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {finalVerifierLine}
+    </>
+  ) : null;
 
   return (
     <div className="live-agent-grid console-only">
@@ -158,16 +330,27 @@ export default function AgentRunPanels({
           <div className="agent-work-strip">
             <span className={`agent-work-dot ${isActiveRun ? "running" : ""}`} />
             <strong>{workLabel}</strong>
-            <span className={latestEvent?.status === "failed" ? "agent-work-error" : ""}>{latestSummary}</span>
+            <span className={latestEvent?.status === "failed" || runError ? "agent-work-error" : ""}>{latestSummary}</span>
           </div>
-          {visibleEvents.length === 0 ? (
+          {!latestEvent && runError ? (
+            <div className="console-line agent-event-line failed">
+              <span className="console-marker">
+                <StepIcon name="skill" width={12} height={12} />
+              </span>
+              <span className="console-step">
+                <code>pricing output</code>
+                <small>failed</small>
+              </span>
+              <span className="console-text">{friendlyError(runError)}</span>
+            </div>
+          ) : null}
+          {visibleEvents.length === 0 && !hasPricingReasoningBlock ? (
             <div className="console-empty">{emptyMessage}</div>
-          ) : (
-            visibleEvents.map((event, index) => (
-              <div
-                key={`${event.timestamp || "event"}-${event.stage}-${index}`}
-                className={`console-line agent-event-line ${statusClass(event.status)}`}
-              >
+          ) : null}
+          {visibleEvents.length === 0 && hasPricingReasoningBlock ? pricingReasoningBlock : null}
+          {visibleEvents.map((event, index) => (
+            <div key={`${event.timestamp || "event"}-${event.stage}-${index}`}>
+              <div className={`console-line agent-event-line ${statusClass(event.status)}`}>
                 <span className="console-marker">
                   {DONE_STATUSES.has(event.status) ? (
                     <CheckIcon width={12} height={12} />
@@ -182,10 +365,11 @@ export default function AgentRunPanels({
                   {event.detail ? <small>{event.detail}</small> : null}
                 </span>
                 <span className="console-text">{event.message}</span>
-                {event.error ? <span className="console-error">{event.error}</span> : null}
+                {event.error ? <span className="console-error">{friendlyError(event.error)}</span> : null}
               </div>
-            ))
-          )}
+              {hasPricingReasoningBlock && index === pricingReasoningInsertIndex ? pricingReasoningBlock : null}
+            </div>
+          ))}
         </div>
       </div>
     </div>

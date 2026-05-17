@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -17,14 +16,15 @@ import {
   Stepper,
   TextField,
 } from "@mui/material";
-import AgentRunPanels from "./AgentRunPanels";
 import DashboardShell from "./DashboardShell";
+import RevyThinkingPanel from "./RevyThinkingPanel";
 import { ArrowRightIcon, StepIcon } from "./AgentIcons";
 import { humanReadableAirbnbPropertyName } from "@/lib/propertyNames";
 
 const SESSION_KEY = "revnestSession";
 const DRAFT_KEY = "revnestWizardDraft";
 const AIRBNB_RUNTIME_MODE = "host-openclaw";
+const REVY_PAGE_PATH = "/?view=revy";
 
 const airbnbUrlPattern = /^https?:\/\/(?:www\.)?airbnb\.[^/]+\/rooms\/(\d+)/i;
 
@@ -162,6 +162,11 @@ function priceToNumber(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function accountScopedSlug(accountId) {
+  const sanitized = String(accountId || "account").replace(/[^a-zA-Z0-9]/g, "");
+  return (sanitized.slice(-8) || "account").toLowerCase();
+}
+
 function buildForecast(basePrice) {
   const dynamicBase = Math.round(basePrice * 1.18);
   return [
@@ -228,7 +233,7 @@ function WizardFrame({ view, session, children }) {
   const pageClassName = view === "run" ? "wizard-page run-wizard-page" : `wizard-page ${view}-wizard-page`;
 
   return (
-    <DashboardShell activeView="" activeAccount={session} email={session?.email}>
+    <DashboardShell activeView={isRunView ? "revy" : ""} activeAccount={session} email={session?.email}>
       <section className={pageClassName}>
         {!isRunView ? (
           <>
@@ -384,7 +389,7 @@ function UrlStep({ session }) {
     }
 
     const roomId = match[1];
-    const propertyId = `airbnb-${roomId}`;
+    const propertyId = `airbnb-${roomId}-${accountScopedSlug(session.id)}`;
     const propertyName = humanReadableAirbnbPropertyName({
       airbnbUrl: form.airbnbUrl,
       propertyId,
@@ -438,9 +443,9 @@ function UrlStep({ session }) {
         pricingHorizon,
         supplementalInfo: property.supplementalInfo,
       };
-      const run = await startAirbnbOpenClawRun(draft);
-      saveStoredJson(DRAFT_KEY, { ...draft, runId: run.runId, conversationId: run.conversationId });
-      router.push(`/properties/new/airbnb/run?propertyId=${encodeURIComponent(propertyId)}&runId=${encodeURIComponent(run.runId)}`);
+      await startAirbnbOpenClawRun(draft);
+      window.localStorage.removeItem(DRAFT_KEY);
+      router.push(REVY_PAGE_PATH);
     } catch (saveError) {
       setError(saveError.message);
     } finally {
@@ -564,7 +569,7 @@ function ManualStep({ session }) {
     setSaving(true);
     try {
       await saveDraftProperty({ accountId: session.id, property });
-      saveStoredJson(DRAFT_KEY, {
+      const draft = {
         accountId: session.id,
         propertyId,
         propertyType: "airbnb",
@@ -574,8 +579,10 @@ function ManualStep({ session }) {
         maxPrice,
         pricingHorizon,
         supplementalInfo: property.additionalInfo,
-      });
-      router.push(`/properties/new/airbnb/run?propertyId=${encodeURIComponent(propertyId)}`);
+      };
+      await startAirbnbOpenClawRun(draft);
+      window.localStorage.removeItem(DRAFT_KEY);
+      router.push(REVY_PAGE_PATH);
     } catch (saveError) {
       setError(saveError.message);
     } finally {
@@ -898,32 +905,19 @@ function RunStep({ session, initialPropertyId, initialRunId = "" }) {
   }
 
   function goNext() {
-    router.push("/");
+    router.push(REVY_PAGE_PATH);
   }
 
   return (
     <WizardFrame view="run" session={session}>
-      <section className="agent-run-page">
-        <header className="agent-run-header">
-          <div>
-            <h2 className="agent-thinking-title">
-              <span className="agent-thinking-icon">
-                <Image className="revy-avatar-image" src="/Revy.png" alt="" width={34} height={34} />
-              </span>
-              <span>Revy is thinking</span>
-              <span className="agent-thinking-dots" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </span>
-            </h2>
-          </div>
-        </header>
-
-        {error ? <div className="form-error">{error}</div> : null}
-
-        <AgentRunPanels events={events} runStatus={run?.status} startedAt={run?.startedAt} />
-
+      <RevyThinkingPanel
+        className="agent-run-page"
+        events={events}
+        runStatus={run?.status}
+        startedAt={run?.startedAt}
+        runError={run?.error}
+        beforePanels={error ? <div className="form-error">{error}</div> : null}
+      >
         {canStopRun ? (
           <button
             type="button"
@@ -948,7 +942,7 @@ function RunStep({ session, initialPropertyId, initialRunId = "" }) {
             <ArrowRightIcon width={16} height={16} />
           </button>
         ) : null}
-      </section>
+      </RevyThinkingPanel>
 
       <Dialog open={stopOpen} onClose={() => setStopOpen(false)}>
         <DialogTitle>Stop the agent?</DialogTitle>
