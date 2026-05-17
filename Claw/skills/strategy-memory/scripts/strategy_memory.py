@@ -20,6 +20,14 @@ DEFAULT_DB_URL = "postgresql://postgres:postgres@127.0.0.1:55434/dev"
 DEFAULT_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_MODEL_CACHE = "/sandbox/.openclaw/workspace/.cache/strategy-memory/models"
 DEFAULT_MIN_SCORE = 0.22
+CLAW_ROOT = Path(__file__).resolve().parents[3]
+FALLBACK_STRATEGY_FILES = [
+    CLAW_ROOT / "AGENTS.md",
+    CLAW_ROOT / "USER.md",
+    CLAW_ROOT / "skills" / "pricing-workflow" / "SKILL.md",
+    CLAW_ROOT / "skills" / "pricing-decision-reasoning" / "SKILL.md",
+    CLAW_ROOT / "skills" / "pricing-output-publisher" / "SKILL.md",
+]
 
 
 def database_url() -> str:
@@ -192,41 +200,103 @@ def lexical_score(content: str, section: str | None, source: str | None, terms: 
     return min(1.0, (hits + phrase_bonus) / max(4, min(len(terms), 12)))
 
 
+def chunk_fallback_file(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    chunks: list[dict[str, Any]] = []
+    section = path.stem
+    buffer: list[str] = []
+
+    def flush() -> None:
+        nonlocal buffer
+        content = "\n".join(buffer).strip()
+        if content:
+            chunks.append(
+                {
+                    "source": path.name,
+                    "source_path": str(path),
+                    "section": section,
+                    "content": content[:1800],
+                    "metadata": {"fallback": True},
+                }
+            )
+        buffer = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            flush()
+            section = stripped.lstrip("#").strip() or path.stem
+            continue
+        buffer.append(line)
+        if sum(len(item) for item in buffer) > 1600:
+            flush()
+    flush()
+    return chunks
+
+
+def fallback_strategy_chunks() -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    for path in FALLBACK_STRATEGY_FILES:
+        chunks.extend(chunk_fallback_file(path))
+    return chunks
+
+
+def lexical_rank_chunks(chunks: list[dict[str, Any]], terms: list[str], limit: int) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for chunk in chunks:
+        score_value = lexical_score(
+            str(chunk.get("content") or ""),
+            str(chunk.get("section") or ""),
+            str(chunk.get("source") or ""),
+            terms,
+        )
+        if score_value <= 0:
+            continue
+        item = dict(chunk)
+        item["score"] = round(score_value, 4)
+        ranked.append(item)
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    return ranked[:limit]
+
+
 def lexical_search_strategy_memory(query: str, expanded_query: str, top_k: int) -> dict[str, Any]:
     terms = []
     for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{2,}", expanded_query.lower()):
         if term not in terms:
             terms.append(term)
     limit = max(1, min(int(top_k or 8), 20))
-    chunks: list[dict[str, Any]] = []
-    with connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT source, source_path, section, content, metadata
-                FROM strategy_memory_chunks
-                """
-            )
-            for source, source_path, section, content, metadata in cur.fetchall():
-                score_value = lexical_score(content or "", section, source, terms)
-                if score_value <= 0:
-                    continue
-                chunks.append(
-                    {
-                        "source": source,
-                        "source_path": source_path,
-                        "section": section,
-                        "score": round(score_value, 4),
-                        "content": content,
-                        "metadata": metadata if isinstance(metadata, dict) else json.loads(metadata),
-                    }
+    try:
+        chunks: list[dict[str, Any]] = []
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT source, source_path, section, content, metadata
+                    FROM strategy_memory_chunks
+                    """
                 )
-    chunks.sort(key=lambda item: item["score"], reverse=True)
+                for source, source_path, section, content, metadata in cur.fetchall():
+                    chunks.append(
+                        {
+                            "source": source,
+                            "source_path": source_path,
+                            "section": section,
+                            "content": content,
+                            "metadata": metadata if isinstance(metadata, dict) else json.loads(metadata),
+                        }
+                    )
+        ranked = lexical_rank_chunks(chunks, terms, limit)
+        retrieval_mode = "lexical"
+    except Exception:
+        ranked = lexical_rank_chunks(fallback_strategy_chunks(), terms, limit)
+        retrieval_mode = "lexical_file_fallback"
     return {
         "query": query,
         "expanded_query": expanded_query,
-        "retrieval_mode": "lexical",
-        "chunks": chunks[:limit],
+        "retrieval_mode": retrieval_mode,
+        "chunks": ranked,
     }
 
 
