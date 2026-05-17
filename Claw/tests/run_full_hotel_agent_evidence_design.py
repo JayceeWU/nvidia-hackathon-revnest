@@ -19,7 +19,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "nemoclaw" / "evidence" / "full_hotel_agent_run"
-DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/test"
 HOTEL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000103"
 DEFAULT_JUDGE_SANDBOX = "revnest-judge"
 
@@ -29,10 +29,11 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run_command(command: list[str], *, timeout: int | None = None) -> dict:
+def run_command(command: list[str], *, timeout: int | None = None, env: dict[str, str] | None = None) -> dict:
     result = subprocess.run(
         command,
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -187,7 +188,10 @@ This folder is the fixed evidence layout for the live hotel NemoClaw run.
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", default=os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL)
+    parser.add_argument(
+        "--database-url",
+        default=os.environ.get("CLAW_TEST_DATABASE_URL") or DEFAULT_DATABASE_URL,
+    )
     parser.add_argument("--webapp-url", default=os.environ.get("REVNEST_WEBAPP_URL", "http://localhost:3000"))
     parser.add_argument("--run-agent", action="store_true", help="Execute the long hotel NemoClaw agent run.")
     parser.add_argument("--no-write", action="store_true", help="Print the evidence manifest without updating evidence files.")
@@ -203,7 +207,13 @@ def main() -> int:
 
     agent_result = {"skipped": True, "reason": "Pass --run-agent to execute the full hotel workflow."}
     if args.run_agent:
-        agent_result = run_command(command, timeout=args.timeout_seconds + 120)
+        agent_env = {
+            **os.environ,
+            "DATABASE_URL": args.database_url,
+            "CLAW_DATABASE_URL": args.database_url,
+            "CLAW_TEST_DATABASE_URL": args.database_url,
+        }
+        agent_result = run_command(command, timeout=args.timeout_seconds + 120, env=agent_env)
     db_after = db_snapshot(args.database_url, HOTEL_ACCOUNT_ID)
     webapp_after = fetch_webapp_snapshot(HOTEL_ACCOUNT_ID, args.webapp_url)
     manifest = {

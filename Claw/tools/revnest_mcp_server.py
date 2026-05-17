@@ -348,6 +348,7 @@ def collect_market_data_bundle_impl(
     property_type: str = "airbnb",
     end_date: str | None = None,
     pricing_horizon: int | None = None,
+    paging_horizon: int | str | None = None,
     summary_property_ids: list[str] | None = None,
     capacity: int | str | None = None,
     adults: int | str | None = None,
@@ -366,7 +367,8 @@ def collect_market_data_bundle_impl(
     dry_run: bool = False,
     database_url: str | None = None,
 ) -> dict[str, Any]:
-    if not end_date and not pricing_horizon:
+    resolved_pricing_horizon = pricing_horizon if pricing_horizon not in (None, "") else paging_horizon
+    if not end_date and not resolved_pricing_horizon:
         raise ValueError("collect_market_data_bundle requires end_date or pricing_horizon")
 
     cmd = [
@@ -405,8 +407,8 @@ def collect_market_data_bundle_impl(
     ]
     if end_date:
         cmd.extend(["--end-date", end_date])
-    if pricing_horizon:
-        cmd.extend(["--pricing-horizon", str(pricing_horizon)])
+    if resolved_pricing_horizon:
+        cmd.extend(["--pricing-horizon", str(resolved_pricing_horizon)])
     if summary_property_ids:
         cmd.extend(["--summary-property-ids-json", json_dumps(summary_property_ids)])
     optional_values = {
@@ -1526,6 +1528,7 @@ def create_mcp_server() -> Any:
         property_type: str = "airbnb",
         end_date: str | None = None,
         pricing_horizon: int | None = None,
+        paging_horizon: int | str | None = None,
         summary_property_ids: list[str] | None = None,
         capacity: int | str | None = None,
         adults: int | str | None = None,
@@ -1544,7 +1547,7 @@ def create_mcp_server() -> Any:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Run the shared market-data fan-out/fan-in bundle through a structured MCP call."""
-        return collect_market_data_bundle_impl(run_id, account_id, property_id, address, start_date, property_type, end_date, pricing_horizon, summary_property_ids, capacity, adults, bedrooms, bathrooms, currency, event_limit, hotel_limit, tavily_query_count, tavily_max_results, max_workers, task_timeout_seconds, timeout_seconds, log_path, output_path, dry_run)
+        return collect_market_data_bundle_impl(run_id, account_id, property_id, address, start_date, property_type, end_date, pricing_horizon, paging_horizon, summary_property_ids, capacity, adults, bedrooms, bathrooms, currency, event_limit, hotel_limit, tavily_query_count, tavily_max_results, max_workers, task_timeout_seconds, timeout_seconds, log_path, output_path, dry_run)
 
     @mcp.tool()
     def estimate_revpar(property_id: str, price_calendar: Any, rooms: int = 1, occupancy_rate: float | str = 1.0) -> dict[str, Any]:

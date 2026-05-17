@@ -12,7 +12,7 @@ import subprocess
 from typing import Any
 
 
-DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/test"
 
 
 def sql_literal(value: object) -> str:
@@ -186,7 +186,7 @@ def main() -> int:
     parser.add_argument("--my-place")
     args, _unknown = parser.parse_known_args()
 
-    database_url = os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL
+    database_url = os.environ.get("CLAW_TEST_DATABASE_URL") or DEFAULT_DATABASE_URL
     conversation_id = args.conversation_id or f"demo1-e2e-{args.run_id}"
     log_path = Path(args.log_path)
 

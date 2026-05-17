@@ -30,7 +30,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 WEBAPP_DIR = ROOT / "WebApp"
-DEFAULT_CLAW_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+DEFAULT_CLAW_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/test"
 DEFAULT_MOCKHOTEL_DATABASE_URL = "postgres://postgres:postgres@localhost:55432/dev"
 DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-0000000002e2"
 TARGET_PROPERTY_ID = "demo2-e2e-standard-king"
@@ -497,7 +497,10 @@ def simulate_discord_prompt_accept(client: HttpClient, account_id: str, task: di
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", default=os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_CLAW_DATABASE_URL)
+    parser.add_argument(
+        "--database-url",
+        default=os.environ.get("CLAW_TEST_DATABASE_URL") or DEFAULT_CLAW_DATABASE_URL,
+    )
     parser.add_argument("--mockhotel-database-url", default=os.environ.get("MOCKHOTEL_DATABASE_URL") or os.environ.get("MOCK_HOTEL_DATABASE_URL") or DEFAULT_MOCKHOTEL_DATABASE_URL)
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--port", type=int, default=3210)
@@ -533,6 +536,7 @@ def main() -> int:
             **os.environ,
             "DATABASE_URL": args.database_url,
             "CLAW_DATABASE_URL": args.database_url,
+            "CLAW_TEST_DATABASE_URL": args.database_url,
             "MOCKHOTEL_DATABASE_URL": args.mockhotel_database_url,
             "REVNEST_WEBAPP_PORT": str(args.port),
             "REVNEST_SESSION_SECRET": "demo2-e2e-local-session-secret",
@@ -542,6 +546,7 @@ def main() -> int:
         }
         if not args.live_agent:
             env["REVNEST_AGENT_RUN_FIXTURE"] = "demo2"
+            env["REVNEST_ALLOW_AGENT_FIXTURES"] = "1"
         if not args.skip_webapp_build:
             build_webapp(env)
         if not port_available(args.port):

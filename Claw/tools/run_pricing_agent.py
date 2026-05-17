@@ -25,7 +25,9 @@ import sys
 import threading
 import time
 import tempfile
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -38,10 +40,39 @@ DEFAULT_NEMOCLAW_SANDBOX = "my-assistant"
 DEFAULT_NEMOCLAW_WORKDIR = "/sandbox/RevNest/Claw"
 DEFAULT_RUNTIME_MODE = "split-demo"
 DEFAULT_OPENCLAW_AGENT = os.environ.get("REVNEST_OPENCLAW_AGENT", "main")
-DEFAULT_OPENCLAW_MODEL = os.environ.get("REVNEST_OPENCLAW_MODEL", "ollama-local/nemotron-3-super:latest")
+DEFAULT_TOOL_MODEL = os.environ.get(
+    "REVNEST_TOOL_MODEL",
+    os.environ.get("REVNEST_OPENCLAW_MODEL", "ollama-local/qwen3.6:35b"),
+)
+DEFAULT_OPENCLAW_MODEL = DEFAULT_TOOL_MODEL
+DEFAULT_TRACE_REASONING_MODEL = os.environ.get("REVNEST_TRACE_REASONING_MODEL", "nemotron3:33b")
+DEFAULT_TRACE_REASONING_BASE_URL = os.environ.get(
+    "REVNEST_TRACE_REASONING_BASE_URL",
+    os.environ.get("REVNEST_FINAL_REASONING_BASE_URL", "http://127.0.0.1:11434/v1"),
+)
+DEFAULT_FINAL_REASONING_MODEL = os.environ.get("REVNEST_FINAL_REASONING_MODEL", "nemotron-3-super:latest")
+DEFAULT_FINAL_REASONING_BASE_URL = os.environ.get("REVNEST_FINAL_REASONING_BASE_URL", "http://127.0.0.1:11434/v1")
+DEFAULT_TOOL_MODEL_BASE_URL = os.environ.get("REVNEST_TOOL_MODEL_BASE_URL", "http://127.0.0.1:11434/v1")
+DEFAULT_NEMOCLAW_MODEL_PROXY_PORT = int(os.environ.get("REVNEST_NEMOCLAW_MODEL_PROXY_PORT", "11435"))
 DEFAULT_OPENCLAW_MAX_ATTEMPTS = int(os.environ.get("REVNEST_OPENCLAW_MAX_ATTEMPTS", "2"))
 DEFAULT_OPENCLAW_IDLE_RETRY_SECONDS = int(os.environ.get("REVNEST_OPENCLAW_IDLE_RETRY_SECONDS", "180"))
 DEFAULT_OPENCLAW_FIRST_PROGRESS_SECONDS = int(os.environ.get("REVNEST_OPENCLAW_FIRST_PROGRESS_SECONDS", "180"))
+DEFAULT_TOOL_MODEL_TIMEOUT_SECONDS = int(
+    os.environ.get("REVNEST_TOOL_MODEL_TIMEOUT_SECONDS", os.environ.get("REVNEST_OPENCLAW_PROVIDER_TIMEOUT_SECONDS", "300"))
+)
+
+
+def configured_tool_model_timeout_seconds(env: dict[str, str] | None = None) -> int:
+    source = env or os.environ
+    raw_value = source.get(
+        "REVNEST_TOOL_MODEL_TIMEOUT_SECONDS",
+        source.get("REVNEST_OPENCLAW_PROVIDER_TIMEOUT_SECONDS", str(DEFAULT_TOOL_MODEL_TIMEOUT_SECONDS)),
+    )
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_TOOL_MODEL_TIMEOUT_SECONDS
+    return parsed if parsed > 0 else DEFAULT_TOOL_MODEL_TIMEOUT_SECONDS
 DEFAULT_HOST_STRATEGY_MEMORY_VENV = Path.home() / ".cache" / "strategy-memory" / "host-venv"
 DEFAULT_HOST_STRATEGY_MEMORY_MODEL = Path.home() / ".cache" / "strategy-memory" / "models" / "all-MiniLM-L6-v2"
 DEFAULT_HOST_STRATEGY_MEMORY_PGDATA = Path.home() / ".cache" / "strategy-memory" / "postgres"
@@ -1028,6 +1059,25 @@ def resolve_runtime_inputs(args: argparse.Namespace, env: dict[str, str]) -> arg
     return resolved
 
 
+def model_routing_metadata(args: argparse.Namespace) -> dict[str, str]:
+    trace_endpoint = getattr(args, "trace_reasoning_base_url", None) or os.environ.get(
+        "REVNEST_TRACE_REASONING_BASE_URL",
+        DEFAULT_TRACE_REASONING_BASE_URL,
+    )
+    final_endpoint = os.environ.get("REVNEST_FINAL_REASONING_BASE_URL", DEFAULT_FINAL_REASONING_BASE_URL)
+    return {
+        "toolModel": getattr(args, "model", DEFAULT_OPENCLAW_MODEL),
+        "toolEndpoint": os.environ.get("REVNEST_TOOL_MODEL_BASE_URL", DEFAULT_TOOL_MODEL_BASE_URL),
+        "toolModelRole": "tool_call_orchestration_only",
+        "traceReasoningModel": getattr(args, "trace_reasoning_model", DEFAULT_TRACE_REASONING_MODEL),
+        "traceReasoningEndpoint": trace_endpoint,
+        "traceReasoningModelRole": "fast_visible_substage_reasoning_trace",
+        "reasoningModel": getattr(args, "final_reasoning_model", DEFAULT_FINAL_REASONING_MODEL),
+        "reasoningEndpoint": final_endpoint,
+        "reasoningModelRole": "final_reasoning_verification_only",
+    }
+
+
 def log_event(
     *,
     run_id: str,
@@ -1040,6 +1090,7 @@ def log_event(
     caller_skill: str | None = None,
     tool: str | None = None,
     error: str | None = None,
+    metadata: dict[str, object] | None = None,
     log_path: Path = DEFAULT_LOG_PATH,
 ) -> None:
     progress_logger.append_event(
@@ -1054,6 +1105,7 @@ def log_event(
         caller_skill=caller_skill,
         tool=tool,
         error=error[:1000] if error else None,
+        metadata=metadata,
     )
 
 
@@ -1117,6 +1169,140 @@ def env_with_local_bins(env: dict[str, str]) -> dict[str, str]:
     updated = dict(env)
     updated["PATH"] = ":".join(prefixes + ([existing] if existing else []))
     return updated
+
+
+LOOPBACK_MODEL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def normalized_model_base_url(value: str | None) -> str:
+    return (value or DEFAULT_TOOL_MODEL_BASE_URL).strip().rstrip("/")
+
+
+def is_loopback_model_url(base_url: str | None) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(normalized_model_base_url(base_url))
+    except ValueError:
+        return False
+    return (parsed.hostname or "").lower() in LOOPBACK_MODEL_HOSTS
+
+
+def model_endpoint_healthy(base_url: str, timeout: float = 1.5) -> bool:
+    try:
+        request = urllib.request.Request(
+            f"{normalized_model_base_url(base_url)}/models",
+            headers={"Authorization": "Bearer local"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return 200 <= response.status < 300
+    except (OSError, urllib.error.URLError, ValueError, TimeoutError):
+        return False
+
+
+def host_proxy_base_url_for(source_base_url: str, env: dict[str, str]) -> tuple[str, str]:
+    parsed = urllib.parse.urlsplit(normalized_model_base_url(source_base_url))
+    port = int(env.get("REVNEST_NEMOCLAW_MODEL_PROXY_PORT", str(DEFAULT_NEMOCLAW_MODEL_PROXY_PORT)))
+    path = parsed.path.rstrip("/") or "/v1"
+    return f"http://host.openshell.internal:{port}{path}", f"http://127.0.0.1:{port}{path}"
+
+
+def ensure_nemoclaw_model_proxy(source_base_url: str, env: dict[str, str]) -> str:
+    parsed = urllib.parse.urlsplit(normalized_model_base_url(source_base_url))
+    target_host = parsed.hostname or "127.0.0.1"
+    target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if target_host.lower() not in LOOPBACK_MODEL_HOSTS or parsed.scheme != "http":
+        return normalized_model_base_url(source_base_url)
+
+    sandbox_base_url, host_probe_base_url = host_proxy_base_url_for(source_base_url, env)
+    if model_endpoint_healthy(host_probe_base_url):
+        return sandbox_base_url
+    if not model_endpoint_healthy(source_base_url):
+        raise RuntimeSetupError(
+            f"Local model endpoint {normalized_model_base_url(source_base_url)} is not reachable from the host. "
+            "Start Ollama or set REVNEST_TOOL_MODEL_BASE_URL to a reachable OpenAI-compatible endpoint."
+        )
+
+    proxy_port = urllib.parse.urlsplit(host_probe_base_url).port or DEFAULT_NEMOCLAW_MODEL_PROXY_PORT
+    proxy_code = r"""
+import select
+import socket
+import sys
+import threading
+
+listen_host = sys.argv[1]
+listen_port = int(sys.argv[2])
+target_host = sys.argv[3]
+target_port = int(sys.argv[4])
+
+def relay(left, right):
+    sockets = [left, right]
+    try:
+        while True:
+            readable, _, _ = select.select(sockets, [], [], 30)
+            for sock in readable:
+                data = sock.recv(65536)
+                if not data:
+                    return
+                other = right if sock is left else left
+                other.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((listen_host, listen_port))
+    server.listen(128)
+    while True:
+        client, _ = server.accept()
+        try:
+            upstream = socket.create_connection((target_host, target_port), timeout=10)
+        except OSError:
+            client.close()
+            continue
+        threading.Thread(target=relay, args=(client, upstream), daemon=True).start()
+"""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", proxy_code, "0.0.0.0", str(proxy_port), "127.0.0.1", str(target_port)],
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    for _ in range(30):
+        if model_endpoint_healthy(host_probe_base_url, timeout=0.5):
+            print(
+                f"[wrapper] Started NemoClaw model proxy {sandbox_base_url} -> {normalized_model_base_url(source_base_url)}.",
+                flush=True,
+            )
+            return sandbox_base_url
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    raise RuntimeSetupError(
+        f"Could not start NemoClaw model proxy on port {proxy_port}. "
+        f"Set REVNEST_NEMOCLAW_TOOL_MODEL_BASE_URL to a sandbox-reachable endpoint or free port {proxy_port}."
+    )
+
+
+def sandbox_model_base_url(base_url: str | None, env: dict[str, str], override_key: str) -> str:
+    override = env.get(override_key) or env.get("REVNEST_NEMOCLAW_MODEL_BASE_URL")
+    if override:
+        return normalized_model_base_url(override)
+    candidate = normalized_model_base_url(base_url)
+    if is_loopback_model_url(candidate):
+        return ensure_nemoclaw_model_proxy(candidate, env)
+    return candidate
 
 
 def candidate_browser_paths(env: dict[str, str]) -> list[Path]:
@@ -1328,8 +1514,6 @@ def build_agent_options(args: argparse.Namespace) -> list[str]:
         "--timeout",
         str(args.timeout_seconds),
     ]
-    if getattr(args, "model", None):
-        options.extend(["--model", args.model])
     if args.verbose:
         options.extend(["--verbose", args.verbose])
     return options
@@ -1368,6 +1552,82 @@ def source_openclaw_state_dir(env: dict[str, str], config_path: Path) -> Path:
     return Path.home() / ".openclaw"
 
 
+def strip_provider_timeout_seconds(data: dict) -> None:
+    models_section = data.get("models", {})
+    if not isinstance(models_section, dict):
+        return
+    providers = models_section.get("providers", {})
+    if not isinstance(providers, dict):
+        return
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        provider.pop("timeoutSeconds", None)
+        models = provider.get("models")
+        if not isinstance(models, list):
+            continue
+        for item in models:
+            if isinstance(item, dict):
+                item.pop("timeoutSeconds", None)
+
+
+def ensure_openclaw_model_available(data: dict, model_id: str, timeout_seconds: int | None = None) -> None:
+    if not model_id:
+        return
+    timeout_seconds = timeout_seconds or configured_tool_model_timeout_seconds()
+    agents = data.setdefault("agents", {})
+    defaults = agents.setdefault("defaults", {})
+    defaults["timeoutSeconds"] = timeout_seconds
+    default_model = defaults.setdefault("model", {})
+    if isinstance(default_model, dict):
+        default_model["primary"] = model_id
+    else:
+        defaults["model"] = {"primary": model_id}
+    allowed_models = defaults.setdefault("models", {})
+    if isinstance(allowed_models, dict):
+        allowed_models.setdefault(model_id, {})
+
+    if "/" not in model_id:
+        return
+    provider_id, provider_model_id = model_id.split("/", 1)
+    providers = data.setdefault("models", {}).setdefault("providers", {})
+    provider = providers.setdefault(
+        provider_id,
+        {
+            "baseUrl": os.environ.get("REVNEST_TOOL_MODEL_BASE_URL", DEFAULT_TOOL_MODEL_BASE_URL),
+            "api": "openai-completions",
+            "models": [],
+        },
+    )
+    if not isinstance(provider, dict):
+        return
+    provider.pop("timeoutSeconds", None)
+    provider.setdefault("baseUrl", os.environ.get("REVNEST_TOOL_MODEL_BASE_URL", DEFAULT_TOOL_MODEL_BASE_URL))
+    provider.setdefault("api", "openai-completions")
+    if provider_id == "ollama-local":
+        provider.setdefault("apiKey", os.environ.get("OLLAMA_API_KEY", "ollama-local"))
+    models = provider.setdefault("models", [])
+    if not isinstance(models, list):
+        return
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        item.pop("timeoutSeconds", None)
+        if item.get("id") == provider_model_id:
+            return
+    models.append(
+        {
+            "id": provider_model_id,
+            "name": provider_model_id,
+            "reasoning": True,
+            "input": ["text"],
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": 131072,
+            "maxTokens": 4096,
+        }
+    )
+
+
 def link_runtime_dependency(source: Path, target: Path) -> None:
     if not source.exists() or target.exists():
         return
@@ -1395,6 +1655,7 @@ def prepare_host_openclaw_runtime(
     data: dict = {}
     if source_config.exists():
         data = json.loads(source_config.read_text(encoding="utf-8"))
+    strip_provider_timeout_seconds(data)
 
     runtime_dir = Path(tempfile.gettempdir()) / f"revnest-openclaw-host-runtime-{safe_path_slug(args.session_id)}"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -1405,6 +1666,11 @@ def prepare_host_openclaw_runtime(
     agents = data.setdefault("agents", {})
     defaults = agents.setdefault("defaults", {})
     defaults["workspace"] = str(ROOT)
+    ensure_openclaw_model_available(
+        data,
+        getattr(args, "model", DEFAULT_OPENCLAW_MODEL),
+        timeout_seconds=configured_tool_model_timeout_seconds(env),
+    )
     agent_dir = runtime_dir / "agents" / args.agent / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     source_agent_dir = source_state / "agents" / args.agent / "agent"
@@ -1501,6 +1767,27 @@ def prepare_openclaw_command(
     workdir = args.nemoclaw_workdir
     sandbox_env = dict(env)
     sandbox_env.setdefault("OPENSHELL_GATEWAY", "nemoclaw")
+    tool_model_base_url = sandbox_model_base_url(
+        env.get("REVNEST_TOOL_MODEL_BASE_URL", DEFAULT_TOOL_MODEL_BASE_URL),
+        env,
+        "REVNEST_NEMOCLAW_TOOL_MODEL_BASE_URL",
+    )
+    trace_reasoning_base_url = sandbox_model_base_url(
+        getattr(args, "trace_reasoning_base_url", None)
+        or env.get("REVNEST_TRACE_REASONING_BASE_URL")
+        or DEFAULT_TRACE_REASONING_BASE_URL,
+        env,
+        "REVNEST_NEMOCLAW_TRACE_REASONING_BASE_URL",
+    )
+    final_reasoning_base_url = sandbox_model_base_url(
+        env.get("REVNEST_FINAL_REASONING_BASE_URL", DEFAULT_FINAL_REASONING_BASE_URL),
+        env,
+        "REVNEST_NEMOCLAW_FINAL_REASONING_BASE_URL",
+    )
+    sandbox_env["REVNEST_TOOL_MODEL_BASE_URL"] = tool_model_base_url
+    sandbox_env["REVNEST_TRACE_REASONING_BASE_URL"] = trace_reasoning_base_url
+    sandbox_env["REVNEST_FINAL_REASONING_BASE_URL"] = final_reasoning_base_url
+    sandbox_env["OPENAI_BASE_URL"] = final_reasoning_base_url
     print(
         f"[wrapper] Running OpenClaw inside NemoClaw sandbox '{sandbox}'.",
         flush=True,
@@ -1516,6 +1803,7 @@ def prepare_openclaw_command(
         env=sandbox_env,
     )
     runtime_dir = f"/tmp/revnest-openclaw-runtime-{safe_path_slug(args.session_id)}"
+    tool_model_timeout_seconds = configured_tool_model_timeout_seconds(env)
     runtime_config_code = (
         "import json,os,pathlib,sys;"
         "runtime=pathlib.Path(sys.argv[1]);"
@@ -1523,16 +1811,39 @@ def prepare_openclaw_command(
         "agent_id=sys.argv[3];"
         "src=pathlib.Path('/sandbox/.openclaw/openclaw.json');"
         "data=json.loads(src.read_text());"
+        "model_base_url=sys.argv[6];"
         "agents=data.setdefault('agents',{});"
         "defaults=agents.setdefault('defaults',{});"
         "defaults['workspace']=workdir;"
+        "timeout_seconds=int(sys.argv[5]);"
+        "defaults['timeoutSeconds']=timeout_seconds;"
+        "model_id=sys.argv[4];"
+        "default_model=defaults.setdefault('model',{});"
+        "isinstance(default_model,dict) and default_model.update({'primary':model_id});"
+        "not isinstance(default_model,dict) and defaults.update({'model':{'primary':model_id}});"
+        "allowed=defaults.setdefault('models',{});"
+        "isinstance(allowed,dict) and allowed.setdefault(model_id,{});"
+        "provider_id,provider_model_id=(model_id.split('/',1) if '/' in model_id else ('',model_id));"
+        "providers=data.setdefault('models',{}).setdefault('providers',{});"
+        "[(provider.pop('timeoutSeconds',None),[item.pop('timeoutSeconds',None) for item in provider.get('models',[]) if isinstance(item,dict)]) for provider in providers.values() if isinstance(provider,dict)];"
+        "provider=providers.setdefault(provider_id,{'baseUrl':model_base_url,'api':'openai-completions','models':[]}) if provider_id else None;"
+        "isinstance(provider,dict) and provider.pop('timeoutSeconds',None);"
+        "isinstance(provider,dict) and provider.update({'baseUrl':model_base_url});"
+        "isinstance(provider,dict) and provider.setdefault('api','openai-completions');"
+        "isinstance(provider,dict) and provider_id=='ollama-local' and provider.setdefault('apiKey',os.environ.get('OLLAMA_API_KEY','ollama-local'));"
+        "models=provider.setdefault('models',[]) if isinstance(provider,dict) else [];"
+        "existing=[item for item in models if isinstance(item,dict) and item.get('id')==provider_model_id] if isinstance(models,list) else [];"
+        "[item.pop('timeoutSeconds',None) for item in models if isinstance(item,dict)] if isinstance(models,list) else None;"
+        "isinstance(models,list) and not existing and models.append({'id':provider_model_id,'name':provider_model_id,'reasoning':True,'input':['text'],'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0},'contextWindow':131072,'maxTokens':4096});"
         "tools=data.setdefault('tools',{});"
         "tools['exec']={'host':'auto','security':'full','ask':'off'};"
         "approval_dir=runtime/'home'/'.openclaw';"
         "approval_dir.mkdir(parents=True,exist_ok=True);"
         "(approval_dir/'exec-approvals.json').write_text(json.dumps({'version':1,'defaults':{'security':'full','ask':'off','askFallback':'full'},'agents':{}}));"
-        "(runtime/'agents'/agent_id/'agent').mkdir(parents=True,exist_ok=True);"
-        "entry={'id':agent_id,'default':True,'workspace':workdir,'agentDir':str(runtime/'agents'/agent_id/'agent')};"
+        "agent_dir=runtime/'agents'/agent_id/'agent';"
+        "agent_dir.mkdir(parents=True,exist_ok=True);"
+        "(agent_dir/'auth-profiles.json').write_text(json.dumps({'version':1,'profiles':{'ollama-local:default':{'type':'api_key','provider':'ollama-local','key':os.environ.get('OLLAMA_API_KEY','ollama-local')}}}));"
+        "entry={'id':agent_id,'default':True,'workspace':workdir,'agentDir':str(agent_dir)};"
         "agents['list']=[entry]+[item for item in agents.get('list',[]) if item.get('id')!=agent_id];"
         "strategy=data.get('mcp',{}).get('servers',{}).get('strategy-memory');"
         "env=strategy.setdefault('env',{}) if strategy else None;"
@@ -1545,12 +1856,30 @@ def prepare_openclaw_command(
         "discord and not os.environ.get('DISCORD_BOT_TOKEN') and discord.update({'enabled':False});"
         "(runtime/'openclaw.json').write_text(json.dumps(data))"
     )
+    runtime_final_scrub_code = (
+        "import json,pathlib,sys;"
+        "path=pathlib.Path(sys.argv[1]);"
+        "data=json.loads(path.read_text());"
+        "providers=data.get('models',{}).get('providers',{});"
+        "[(provider.pop('timeoutSeconds',None),[item.pop('timeoutSeconds',None) for item in provider.get('models',[]) if isinstance(item,dict)]) for provider in (providers.values() if isinstance(providers,dict) else []) if isinstance(provider,dict)];"
+        "path.write_text(json.dumps(data));"
+        "providers=data.get('models',{}).get('providers',{});"
+        "violations=[];"
+        "[violations.append(f'provider:{provider_id}') for provider_id,provider in (providers.items() if isinstance(providers,dict) else []) if isinstance(provider,dict) and 'timeoutSeconds' in provider];"
+        "[violations.append(f'model:{provider_id}.{index}') for provider_id,provider in (providers.items() if isinstance(providers,dict) else []) if isinstance(provider,dict) for index,item in enumerate(provider.get('models') or []) if isinstance(item,dict) and 'timeoutSeconds' in item];"
+        "sys.exit('OpenClaw config still has unsupported timeoutSeconds under '+','.join(violations) if violations else 0)"
+    )
     remote_script = (
         'set -eu; '
         f'runtime_dir={shlex.quote(runtime_dir)}; '
         'mkdir -p "$runtime_dir/agents"; '
         'if [ ! -e "$runtime_dir/plugin-runtime-deps" ]; then ln -s /sandbox/.openclaw/plugin-runtime-deps "$runtime_dir/plugin-runtime-deps"; fi; '
-        f'python3 -c {shlex.quote(runtime_config_code)} "$runtime_dir" "$PWD" {shlex.quote(args.agent)}; '
+        f'export REVNEST_TOOL_MODEL_BASE_URL={shlex.quote(tool_model_base_url)}; '
+        f'export REVNEST_TRACE_REASONING_BASE_URL={shlex.quote(trace_reasoning_base_url)}; '
+        f'export REVNEST_FINAL_REASONING_BASE_URL={shlex.quote(final_reasoning_base_url)}; '
+        f'export OPENAI_BASE_URL={shlex.quote(final_reasoning_base_url)}; '
+        f'python3 -c {shlex.quote(runtime_config_code)} "$runtime_dir" "$PWD" {shlex.quote(args.agent)} {shlex.quote(args.model)} {tool_model_timeout_seconds} {shlex.quote(tool_model_base_url)}; '
+        f'python3 -c {shlex.quote(runtime_final_scrub_code)} "$runtime_dir/openclaw.json"; '
         'export OPENCLAW_STATE_DIR="$runtime_dir"; '
         'export OPENCLAW_CONFIG_PATH="$runtime_dir/openclaw.json"; '
         'export HOME="$runtime_dir/home"; '
@@ -1613,17 +1942,17 @@ def build_context_instructions(args: argparse.Namespace) -> str:
             "Provide --my-place or save the Airbnb URL on the property before running."
         )
 
-    return f"""Airbnb pricing-context mode with redundant browser verification:
+    return f"""Airbnb pricing-context mode with bounded browser verification:
 - Invoke the pricing-context skill because property_type is airbnb.
 - Use input exactly as my_place "{args.my_place}", property_id "{args.property_id}", and account_id "{args.account_id}".
 - Before doing browser work, append progress to log_path "{args.log_path}". Prefer the `revnest-revenue-tools` MCP `log_progress` tool with run_id "{args.run_id}", workflow "{WORKFLOW_NAME}", skill "{WORKFLOW_NAME}", called_skill "pricing-context", stage `context`, status `started`, message "Starting Airbnb pricing browser context collection", tool "agent-browser", and log_path "{args.log_path}". CLI fallback:
   python3 tools/progress_logger.py --log-path "{args.log_path}" log --run-id "{args.run_id}" --workflow "{WORKFLOW_NAME}" --skill "{WORKFLOW_NAME}" --called-skill "pricing-context" --stage context --status started --message "Starting Airbnb pricing browser context collection" --tool "agent-browser"
-- Primary read: use the isolated agent-browser session "{args.run_id}":
-  agent-browser --session "{args.run_id}" open "{args.my_place}"
-  agent-browser --session "{args.run_id}" wait --load networkidle
-  agent-browser --session "{args.run_id}" get url --json
-  agent-browser --session "{args.run_id}" get title --json
-  agent-browser --session "{args.run_id}" snapshot --json
+- Primary read: run the deterministic context helper once with the `exec` tool:
+  python3 tools/airbnb_context_probe.py --run-id "{args.run_id}" --account-id "{args.account_id}" --property-id "{args.property_id}" --my-place "{args.my_place}" --log-path "{args.log_path}"
+- The helper owns the isolated agent-browser session, bounded browser timeouts, Airbnb modal handling, compact extraction, profile upsert, and context progress logging. Inspect its compact JSON result before continuing.
+- Do not run raw `agent-browser snapshot --json` as the primary path; large snapshots slow the qwen tool orchestrator and make the UI appear stuck. Use raw `agent-browser` commands only as a fallback after the helper returns failed output.
+- Required context tool sequence: after the context started progress event, run `tools/airbnb_context_probe.py` with `exec`, observe `"status": "completed"`, then continue. Do not call `revnest-revenue-tools.upsert_airbnb_property_profile` again unless the helper failed before upsert.
+- Do not use web_search to infer the Airbnb location; use the browser URL/title/snapshot. If exact capacity, bath, or ZIP are not visible, omit those fields and upsert partial verified fields such as title, city, state, county, bed, listing URL, and other_info.
 - Secondary fallback only if agent-browser is unavailable or fails: use OpenClaw built-in Browser with the managed openclaw profile:
   openclaw browser --browser-profile openclaw --json status
   openclaw browser --browser-profile openclaw --json start
@@ -1636,19 +1965,26 @@ def build_context_instructions(args: argparse.Namespace) -> str:
 - Extract capacity, zip_code, county, state, city, bed, bath, and other_info. other_info must summarize review signals, amenities/facilities, image/photo count, listing quality, and caveats outside the structured fields.
 - Write extracted fields to property columns and merge JSON keys capacity, zipCode, county, state, city, bed, bath, otherInfo, plus beds/bathroom aliases when known.
 - If listing read, URL verification, extraction, or DB write fails, log context as failed and return a user-facing explanation of the failed step without continuing to market data or pricing.
-- Log context completed only after redundant verification and property profile write succeed.
+- Log context completed only after actual browser command outputs and `upsert_airbnb_property_profile` success. Never mark context completed before those tool calls return.
 """
 
 
-def build_pricing_decision_loop_instructions(property_type: str, pricing_start_date: str, final_reasoning_model: str) -> str:
+def build_pricing_decision_loop_instructions(args: argparse.Namespace, property_type: str, pricing_start_date: str) -> str:
     normalized_type = "hotel" if property_type == "hotel" else "airbnb"
     strategy_query = (
         "hotel Dream Inn revenue management pricing strategy RMS occupancy BAR room type compression"
         if normalized_type == "hotel"
         else "Airbnb short-term rental pricing strategy seasonality booking window event pricing comp set"
     )
+    property_id = getattr(args, "market_anchor_property_id", None) or getattr(args, "property_id", "") or "<property_id>"
     return f"""Pricing decision RAG/calculator loop:
-- Handle one pricing-decision substage at a time. For every substage, write one compact user-facing summary with `log_progress`, then persist the same summary with `upsert_reasoning_step` using account_id, run_id, property_id when available, stage `pricing_decision`, substage, facts, metrics, tool, sources, and confidence. Do not persist hidden chain-of-thought.
+- Model-role boundary: the OpenClaw model `{args.model}` is only the tool-call orchestrator. It must not create pricing reasoning, supply/demand synthesis, final price explanations, or verifier verdicts from its own reasoning. WebApp-visible source-fact trace is produced by `tools/pricing_reasoning_trace.py` with `reasoningEngine=source_fact_trace`; model-authored substage refinement uses Nemotron `{args.trace_reasoning_model}` through `tools/nemotron_reasoning.py`; final publish verification uses the stronger Nemotron model `{args.final_reasoning_model}` through `final_reasoning_verifier.py`. Never present source-fact fallback as Nemotron-authored reasoning.
+- Immediately after market-data fan-in writes `runs/{args.run_id}-market-data.json`, run the fast trace bridge before any long model call:
+  python3 tools/pricing_reasoning_trace.py --account-id "{args.account_id}" --run-id "{args.run_id}" --property-id "{property_id}" --log-path "{args.log_path}" --market-data-path "runs/{args.run_id}-market-data.json" --model "{args.trace_reasoning_model}"
+  This emits the eight core pricing reasoning steps within seconds using observable source facts. It is allowed to be provisional, but it must stay labeled `source_fact_trace` until a Nemotron refinement replaces it.
+- For optional model-authored refinement of one pricing-decision substage at a time, run:
+  python3 tools/nemotron_reasoning.py --task "<substage>" --model "{args.trace_reasoning_model}" --timeout-seconds 45 --max-tokens 256 --max-context-chars 6000 --input-json '<compact_substage_context_json>' --account-id "{args.account_id}" --run-id "{args.run_id}" --property-id "{property_id}" --log-path "{args.log_path}"
+  Use the JSON returned by that Nemotron tool as the only source for a Nemotron-labeled progress message and `upsert_reasoning_step`. Do not write pricing_decision summaries directly with qwen/tool-orchestrator text. Do not persist hidden chain-of-thought.
 - Before strategy memory or pricing calculation, complete the supply-demand sub-loop in order:
   1. `supply_snapshot`: summarize comp count, substitute inventory, availability/sellout/compression language, and subject inventory scarcity.
   2. `demand_snapshot`: summarize events, holidays, tourism/seasonality, weather, booking window, guest segment, and demand strength.
@@ -1669,8 +2005,8 @@ def build_pricing_decision_loop_instructions(property_type: str, pricing_start_d
 - If the second retrieval supports the draft, set strategy_context.validation.status to `supported`, keep corrections_applied empty, and rerun the bundled calculator with calculation_phase `final`.
 - If the second retrieval contradicts or does not support the draft and no correction has been used, record exactly one concise correction in corrections_applied (280 characters or fewer), update the calculator input, set strategy_context.validation.status to `corrected` only if the corrected reasoning is supported, rerun the bundled calculator with calculation_phase `final`, and log `strategy_correction`.
 - If the review is still unsupported after one correction, stop before publishing and answer exactly: `I don't know. Strategy context is unavailable or insufficient.`
-- Before publishing, run the stronger-model final reasoning verifier with model `{final_reasoning_model}`:
-  python3 skills/pricing-decision-reasoning/scripts/final_reasoning_verifier.py --model "{final_reasoning_model}" --input-json '<compact_verification_payload_json>'
+- Before publishing, run the stronger-model final reasoning verifier with model `{args.final_reasoning_model}`:
+  python3 skills/pricing-decision-reasoning/scripts/final_reasoning_verifier.py --model "{args.final_reasoning_model}" --input-json '<compact_verification_payload_json>' --account-id "{args.account_id}" --run-id "{args.run_id}" --property-id "{property_id}" --log-path "{args.log_path}"
 - The verifier payload must include final calculator output, strategy citations, occupancy estimator output, guardrails, and compact supply-demand summaries. Log and persist the verdict as substage `final_reasoning_verification`. If the verifier does not return status `approved`, stop before publishing and answer exactly: `I don't know. Strategy context is unavailable or insufficient.`
 - Publish only final calculator output with strategy_validation_status `supported` or `corrected` and final_reasoning_verification status `approved`. Never publish `draft_unreviewed`, `unsupported`, missing strategy_memory_initial, or missing strategy_memory_review.
 """
@@ -1679,6 +2015,7 @@ def build_pricing_decision_loop_instructions(property_type: str, pricing_start_d
 def build_execution_contract(args: argparse.Namespace) -> str:
     return f"""Execution contract:
 - This is a fresh live run. Do not summarize a workflow as completed until you have actually called tools and observed their outputs.
+- Model routing is strict: `{args.model}` is the qwen tool-calling/orchestration model only. Fast WebApp-visible substage trace comes from `tools/pricing_reasoning_trace.py` as `source_fact_trace`, optional Nemotron substage refinement uses `{args.trace_reasoning_model}`, and final publish verification uses `{args.final_reasoning_model}`. Do not use qwen-generated prose as a pricing reasoning artifact, and never label source-fact trace as Nemotron output.
 - Your first action must be a real tool/exec action that writes an observable progress event for run_id "{args.run_id}" to log_path "{args.log_path}". Prefer `revnest-revenue-tools.log_progress` with log_path "{args.log_path}"; if MCP tools are unavailable, run the CLI fallback with `python3 tools/progress_logger.py --log-path "{args.log_path}" log ...`. The `--log-path` flag must appear before the `log` subcommand.
 - Never call `tools/run_pricing_agent.py`, `python3 tools/run_pricing_agent.py`, or another OpenClaw agent from inside this run. This wrapper is the outer launcher only. Use the concrete stage tools listed below.
 - Never say `log_progress`, `revpar_estimate.py`, `pricing_decision_calculator.py`, `review_hotel_price_adjustments`, or any database write succeeded unless the tool call returned success in this run.
@@ -1748,7 +2085,7 @@ MoodTrip hotel comps are MCP-hosted and separate from `tools/run_parallel_market
 
 Decision: produce an internal `price_calendars_by_property_id` object keyed by each room type property_id. Each value must be a guarded price calendar starting at {pricing_start_date}; its length must equal that room type's own pricing_horizon. Shared market signals can be reused, but room-type-specific current/fixed/agent prices, RMS history, room_count/scarcity, capacity, bed/suite/view/amenity tier, comp relevance weighting, and guardrails must be evaluated per room type.
 
-{build_pricing_decision_loop_instructions("hotel", pricing_start_date, args.final_reasoning_model)}
+{build_pricing_decision_loop_instructions(args, "hotel", pricing_start_date)}
 
 Output: after all guarded calendars are ready, publish forecast data first by calling `tools/revpar_estimate.py write-prices` once per room type. Each call must use that room type's property_id, min_price, max_price, pricing_horizon, room_count/rooms, occupancy when available, `--price-calendar-json` for only that room type, `--run-id "{args.run_id}"`, `--trace-log-path "{args.log_path}"`, and `--conversation-id "revy-heartbeat-<property_id>"`. These hotel `property_price` rows are Revy forecast/recommendation data for the WebApp chart, not live MockHotel/PMS writes. After every room type forecast publish succeeds or fails clearly, call the `revnest-revenue-tools` MCP `review_hotel_price_adjustments` tool with account_id "{args.account_id}", run_id "{args.run_id}", the complete `price_calendars_by_property_id`, `room_type_properties_json`, start_date "{pricing_start_date}", and the final calendar end date. This approval gate compares against MockHotel current rates once and classifies pending tasks as `price_adjustment_required` when the current PMS rate is outside Revy's strategy range, or `price_review_recommended` when the current rate is inside range but the final recommendation is materially different, confidence is low, or guardrail review is needed. It sends one best-effort Discord summary through `DISCORD_WEBHOOK_URL` when configured. If Discord fails, keep the pending tasks. If the user asks to write directly to MockHotel PMS, explain that human WebApp approval is required and stage pending tasks only. If the MCP tool is unavailable, log `revpar_publish` failed/skipped with substage `mockhotel_review` and state that hotel pending approval tasks were not created. Do not call WebApp accept APIs, MockHotel write APIs, direct MockHotel database writes, create a hotel aggregate property, or write live MockHotel prices from Claw.
 
@@ -1814,7 +2151,7 @@ Tavily tourism demand must be tied to the verified destination market. Ignore un
 
 Use `pricing-decision-reasoning` only after context, guardrails, and market-data fan-in. Its internal price_calendar must use date values starting at pricing_start_date ({pricing_start_date}) for pricing_horizon ({args.pricing_horizon}) night(s), with prices in USD dollars.
 
-{build_pricing_decision_loop_instructions(args.property_type, pricing_start_date, args.final_reasoning_model)}
+{build_pricing_decision_loop_instructions(args, args.property_type, pricing_start_date)}
 
 Use `pricing-output-publisher` after the guarded price_calendar is ready. For Airbnb, draft the final concise user-facing explanation before publishing, then call tools/revpar_estimate.py with account_id, property_id, min_price, max_price, pricing_horizon, inline --price-calendar-json, rooms/room_count, occupancy when available, property context JSON when useful, --run-id "{args.run_id}", --conversation-id "{args.conversation_id}", --trace-log-path "{args.log_path}", --user-message {conversation_user_message_json}, --conversation-title, --conversation-summary, and --final-message containing that exact final explanation. This saves Airbnb suggested prices directly to PostgreSQL `property_price` and the explanation/progress trace to `revy_conversation`; return the same explanation to the user after the write finishes. For hotel single-room-type runs, publish the forecast row to `property_price` and `revy_conversation` first, include user_message {conversation_user_message_json} in the saved conversation when using the MCP publisher or `--user-message` when using tools/revpar_estimate.py, then call the `revnest-revenue-tools` MCP `review_hotel_price_adjustments` tool with `price_calendars_by_property_id` shaped as `{{property_id: price_calendar}}`, room type metadata, and the calendar date range. The hotel approval gate classifies pending tasks as `price_adjustment_required` when the current PMS rate is outside Revy's strategy range, or `price_review_recommended` when the current rate is inside range but the final recommendation is materially different, confidence is low, or guardrail review is needed. It sends one best-effort Discord summary when configured and never writes live MockHotel prices directly from Claw. If a prompt asks to write to MockHotel PMS, do not call WebApp accept APIs, MockHotel write APIs, or direct MockHotel database writes; create pending tasks and tell the user WebApp human approval is required.
 
@@ -1997,6 +2334,7 @@ def run_openclaw(
     first_progress_timeout_seconds: int,
     log_path: Path,
     run_id: str,
+    trace_args: argparse.Namespace | None = None,
 ) -> tuple[int, str, str | None]:
     try:
         proc = subprocess.Popen(
@@ -2025,6 +2363,8 @@ def run_openclaw(
     business_progress_seen = False
     chunks: list[str] = []
     stop_reason = None
+    trace_bridge_ran = False
+    market_data_path = ROOT / "runs" / f"{run_id}-market-data.json"
 
     while True:
         try:
@@ -2054,6 +2394,17 @@ def run_openclaw(
                 last_business_progress_count = current_business_progress_count
                 business_progress_seen = True
                 last_progress_at = time.monotonic()
+
+        if trace_args is not None and not trace_bridge_ran and market_data_path.exists():
+            trace_bridge_ran = True
+            trace_code, trace_output = run_pricing_reasoning_trace_check(trace_args, env, log_path)
+            if trace_output:
+                chunks.append(trace_output)
+            if trace_code != 0:
+                print(
+                    f"[wrapper] pricing reasoning live trace bridge incomplete: {compact_output_tail(trace_output, 600)}",
+                    flush=True,
+                )
 
         if timeout_seconds and time.monotonic() - started > timeout_seconds:
             stop_reason = "wrapper timeout"
@@ -2160,6 +2511,143 @@ def run_local_recovery(args: argparse.Namespace, env: dict[str, str], log_path: 
     return result.returncode, result.stdout or ""
 
 
+
+def run_pricing_reasoning_trace_check(args: argparse.Namespace, env: dict[str, str], log_path: Path) -> tuple[int, str]:
+    script = ROOT / "tools" / "pricing_reasoning_trace.py"
+    if not script.exists():
+        return 127, "tools/pricing_reasoning_trace.py is missing"
+    cmd = [
+        sys.executable,
+        str(script),
+        "--account-id",
+        args.account_id,
+        "--run-id",
+        args.run_id,
+        "--log-path",
+        str(log_path),
+        "--model",
+        getattr(args, "trace_reasoning_model", DEFAULT_TRACE_REASONING_MODEL),
+        "--base-url",
+        getattr(args, "trace_reasoning_base_url", None)
+        or env.get("REVNEST_TRACE_REASONING_BASE_URL")
+        or env.get("OPENAI_BASE_URL")
+        or DEFAULT_TRACE_REASONING_BASE_URL,
+    ]
+    if getattr(args, "property_id", None):
+        cmd.extend(["--property-id", args.property_id])
+    database_url = env.get("CLAW_DATABASE_URL") or env.get("DATABASE_URL")
+    if database_url:
+        cmd.extend(["--database-url", database_url])
+    market_data_path = ROOT / "runs" / f"{args.run_id}-market-data.json"
+    if market_data_path.exists():
+        cmd.extend(["--market-data-path", str(market_data_path)])
+
+    result = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    return result.returncode, result.stdout or ""
+
+
+def strategy_memory_chunk_count(env: dict[str, str]) -> int | None:
+    try:
+        output = run_psql_sql("SELECT count(*)::int FROM strategy_memory_chunks", env)
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "strategy_memory_chunks" in message and ("does not exist" in message or "undefinedtable" in message):
+            return None
+        raise
+    for line in reversed([item.strip() for item in output.splitlines() if item.strip()]):
+        try:
+            return int(line)
+        except ValueError:
+            continue
+    return 0
+
+
+def ensure_strategy_memory_ready(args: argparse.Namespace, env: dict[str, str], log_path: Path) -> None:
+    if os.environ.get("REVNEST_SKIP_STRATEGY_MEMORY_BOOTSTRAP", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+
+    existing_count = strategy_memory_chunk_count(env)
+    if existing_count and existing_count > 0:
+        return
+
+    script = ROOT / "skills" / "strategy-memory" / "scripts" / "ingest.py"
+    data_dir = Path(env.get("REVNEST_STRATEGY_MEMORY_DATA_DIR", str(ROOT / "data"))).expanduser()
+    if not script.exists():
+        raise RuntimeSetupError("strategy-memory ingest.py is missing; cannot bootstrap strategy_memory_chunks.")
+    if not data_dir.exists():
+        raise RuntimeSetupError(f"Strategy memory data directory does not exist: {data_dir}")
+
+    database_url = database_url_from(env)
+    bootstrap_env = env_with_local_bins(env)
+    bootstrap_env.setdefault("DATABASE_URL", database_url)
+    bootstrap_env.setdefault("CLAW_DATABASE_URL", database_url)
+    bootstrap_env.setdefault("STRATEGY_MEMORY_DATABASE_URL", database_url)
+    bootstrap_env.setdefault("STRATEGY_MEMORY_MODEL_CACHE", str(DEFAULT_HOST_STRATEGY_MEMORY_MODEL.parent))
+    if DEFAULT_HOST_STRATEGY_MEMORY_MODEL.exists():
+        bootstrap_env.setdefault("STRATEGY_MEMORY_MODEL", str(DEFAULT_HOST_STRATEGY_MEMORY_MODEL))
+
+    log_event(
+        run_id=args.run_id,
+        stage="strategy_memory_bootstrap",
+        status="started",
+        message="Bootstrapping strategy memory because strategy_memory_chunks is missing or empty.",
+        skill=WORKFLOW_NAME,
+        tool="strategy-memory/ingest.py",
+        metadata={"dataDir": str(data_dir), "existingChunkCount": existing_count},
+        log_path=log_path,
+    )
+    timeout = int(env.get("REVNEST_STRATEGY_MEMORY_BOOTSTRAP_TIMEOUT_SECONDS", "900"))
+    result = subprocess.run(
+        [str(revnest_mcp_python()), str(script), "--data-dir", str(data_dir)],
+        cwd=ROOT,
+        env=bootstrap_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    if result.returncode != 0:
+        detail = compact_output_tail(result.stdout, 1200)
+        log_event(
+            run_id=args.run_id,
+            stage="strategy_memory_bootstrap",
+            status="failed",
+            message="Strategy memory bootstrap failed.",
+            skill=WORKFLOW_NAME,
+            tool="strategy-memory/ingest.py",
+            error=detail or f"exit code {result.returncode}",
+            log_path=log_path,
+        )
+        raise RuntimeSetupError(f"Strategy memory bootstrap failed: {detail or f'exit code {result.returncode}'}")
+
+    final_count = strategy_memory_chunk_count(env)
+    if not final_count or final_count <= 0:
+        raise RuntimeSetupError("Strategy memory bootstrap finished but strategy_memory_chunks is still empty.")
+    log_event(
+        run_id=args.run_id,
+        stage="strategy_memory_bootstrap",
+        status="completed",
+        message=f"Strategy memory ready with {final_count} chunk(s).",
+        skill=WORKFLOW_NAME,
+        tool="strategy-memory/ingest.py",
+        metadata={"chunkCount": final_count},
+        log_path=log_path,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run OpenClaw pricing workflow with progress JSONL events")
     parser.add_argument("--account-id", required=True, help="RevNest account id")
@@ -2215,8 +2703,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-path", default=str(DEFAULT_LOG_PATH), help="Progress JSONL file path")
     parser.add_argument("--message-extra", default="", help="Extra text appended to the OpenClaw message")
     parser.add_argument(
+        "--trace-reasoning-model",
+        default=DEFAULT_TRACE_REASONING_MODEL,
+        help="Fast local model used for optional WebApp-visible pricing substage refinement",
+    )
+    parser.add_argument(
+        "--trace-reasoning-base-url",
+        default=DEFAULT_TRACE_REASONING_BASE_URL,
+        help="OpenAI-compatible endpoint for fast pricing substage refinement",
+    )
+    parser.add_argument(
         "--final-reasoning-model",
-        default=os.environ.get("REVNEST_FINAL_REASONING_MODEL", "nemotron-3-super:latest"),
+        default=DEFAULT_FINAL_REASONING_MODEL,
         help="Local model used by the final compact reasoning verifier before publish",
     )
     parser.add_argument(
@@ -2285,6 +2783,14 @@ def apply_runtime_mode(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
+def runtime_agent_name(args: argparse.Namespace) -> str:
+    return "NemoClaw" if getattr(args, "force_nemoclaw", False) else "OpenClaw"
+
+
+def runtime_agent_tool(args: argparse.Namespace) -> str:
+    return "nemoclaw agent" if getattr(args, "force_nemoclaw", False) else "openclaw agent"
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -2316,18 +2822,28 @@ def main() -> int:
     if args.clear_log and not args.preserve_log:
         progress_logger.clear_log(log_path)
 
+    runtime_name = runtime_agent_name(args)
+    runtime_tool = runtime_agent_tool(args)
     log_event(
         run_id=args.run_id,
         stage="agent_start",
         status="started",
-        message="OpenClaw pricing workflow agent started",
+        message=f"{runtime_name} pricing workflow agent started",
         skill=WORKFLOW_NAME,
-        tool="openclaw agent",
+        tool=runtime_tool,
+        metadata={"modelRouting": model_routing_metadata(args), "fixtureMode": False, "recoveryEnabled": local_recovery_enabled(args)},
         log_path=log_path,
     )
 
     env = load_dotenv(os.environ)
     env["REVNEST_PROGRESS_WRAPPER"] = "1"
+    env["REVNEST_TRACE_REASONING_MODEL"] = getattr(args, "trace_reasoning_model", DEFAULT_TRACE_REASONING_MODEL)
+    trace_reasoning_base_url = getattr(args, "trace_reasoning_base_url", DEFAULT_TRACE_REASONING_BASE_URL)
+    if trace_reasoning_base_url == DEFAULT_TRACE_REASONING_BASE_URL and env.get("REVNEST_TRACE_REASONING_BASE_URL"):
+        trace_reasoning_base_url = env["REVNEST_TRACE_REASONING_BASE_URL"]
+    args.trace_reasoning_base_url = trace_reasoning_base_url
+    env["REVNEST_TRACE_REASONING_BASE_URL"] = trace_reasoning_base_url
+    env["REVNEST_FINAL_REASONING_MODEL"] = getattr(args, "final_reasoning_model", DEFAULT_FINAL_REASONING_MODEL)
     wrapper_timeout = args.timeout_seconds + 30 if args.timeout_seconds else 0
     max_attempts = max(1, int(args.max_attempts or 1))
     idle_retry_seconds = max(0, int(args.idle_retry_seconds or 0))
@@ -2337,6 +2853,7 @@ def main() -> int:
     stop_reason = None
     empty_success = False
     try:
+        ensure_strategy_memory_ready(args, env, log_path)
         args = resolve_runtime_inputs(args, env)
         message = build_message(message_args_for_runtime(args))
     except (RuntimeSetupError, RuntimeError, ValueError) as exc:
@@ -2354,7 +2871,7 @@ def main() -> int:
                     run_id=args.run_id,
                     stage="wrapper_retry",
                     status="started",
-                    message=f"Retrying OpenClaw pricing workflow attempt {attempt}/{max_attempts}.",
+                    message=f"Retrying {runtime_name} pricing workflow attempt {attempt}/{max_attempts}.",
                     skill=WORKFLOW_NAME,
                     tool="run_pricing_agent.py",
                     log_path=log_path,
@@ -2377,6 +2894,7 @@ def main() -> int:
                 first_progress_timeout_seconds,
                 log_path,
                 args.run_id,
+                args,
             )
             lower_tail = output_tail.lower()
             model_idle_timeout = "model idle timeout" in lower_tail
@@ -2391,7 +2909,7 @@ def main() -> int:
                 run_id=args.run_id,
                 stage="wrapper_retry",
                 status="info",
-                message=f"OpenClaw attempt {attempt}/{max_attempts} did not produce usable progress; retrying.",
+                message=f"{runtime_name} attempt {attempt}/{max_attempts} did not produce usable progress; retrying.",
                 skill=WORKFLOW_NAME,
                 tool="run_pricing_agent.py",
                 error=reason,
@@ -2432,9 +2950,9 @@ def main() -> int:
             run_id=args.run_id,
             stage="agent_finish",
             status="failed",
-            message="OpenClaw pricing workflow agent did not complete",
+            message=f"{runtime_name} pricing workflow agent did not complete",
             skill=WORKFLOW_NAME,
-            tool="openclaw agent",
+            tool=runtime_tool,
             error=stop_reason,
             log_path=log_path,
         )
@@ -2442,13 +2960,27 @@ def main() -> int:
 
     empty_success = returncode == 0 and missing_durable_output
     if returncode == 0 and not model_idle_timeout and not request_timeout and not empty_success:
+        trace_code, trace_output = run_pricing_reasoning_trace_check(args, env, log_path)
+        if trace_code != 0:
+            trace_tail = compact_output_tail(trace_output, 1200)
+            log_event(
+                run_id=args.run_id,
+                stage="agent_finish",
+                status="failed",
+                message=f"{runtime_name} pricing workflow agent did not complete",
+                skill=WORKFLOW_NAME,
+                tool=runtime_tool,
+                error=f"pricing reasoning trace incomplete: {trace_tail}",
+                log_path=log_path,
+            )
+            return trace_code or 1
         log_event(
             run_id=args.run_id,
             stage="agent_finish",
             status="completed",
-            message="OpenClaw pricing workflow agent finished",
+            message=f"{runtime_name} pricing workflow agent finished",
             skill=WORKFLOW_NAME,
-            tool="openclaw agent",
+            tool=runtime_tool,
             log_path=log_path,
         )
         return 0
@@ -2468,9 +3000,9 @@ def main() -> int:
         run_id=args.run_id,
         stage="agent_finish",
         status="failed",
-        message="OpenClaw pricing workflow agent did not complete",
+        message=f"{runtime_name} pricing workflow agent did not complete",
         skill=WORKFLOW_NAME,
-        tool="openclaw agent",
+        tool=runtime_tool,
         error=error,
         log_path=log_path,
     )

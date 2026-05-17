@@ -116,7 +116,13 @@ unless the user explicitly asks about internal storage.
 
 During `pricing_decision`, persist each compact reasoning substage summary with
 `upsert_reasoning_step` after logging progress. These are durable user-facing
-summaries in `pricing_record`, not hidden chain-of-thought.
+summaries in `pricing_record`, not hidden chain-of-thought. The main qwen tool
+model may only orchestrate tool calls. The live WebApp timeline should first be
+filled by `tools/pricing_reasoning_trace.py` as `reasoningEngine=source_fact_trace`;
+optional Nemotron substage refinement uses `REVNEST_TRACE_REASONING_MODEL`
+(default `nemotron3:33b`) through `tools/nemotron_reasoning.py`; the final
+publish gate must come from `final_reasoning_verifier.py` using the stronger
+`REVNEST_FINAL_REASONING_MODEL`.
 
 ## Hotel Batch Data Scope
 

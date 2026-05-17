@@ -19,21 +19,25 @@ Do not require any other input for this skill. If `my_place` is missing or blank
 
 ## Airbnb Browser Reads
 
-Verify the current Airbnb page from `my_place` before completing `context`. Use at least two successful reads before trusting extracted facts.
+Verify the current Airbnb page from `my_place` before completing `context`.
 
-Primary read: existing `agent-browser` / `agent-browser-clawdbot` in an isolated
-session based on the run id:
+Primary read: run the bounded helper. It owns the isolated `agent-browser`
+session, modal handling, compact extraction, profile upsert, and progress
+logging:
 
 ```bash
-agent-browser --session "<run_id>" open "<my_place>"
-agent-browser --session "<run_id>" wait --load networkidle
-agent-browser --session "<run_id>" get url --json
-agent-browser --session "<run_id>" get title --json
-agent-browser --session "<run_id>" snapshot --json
+python3 tools/airbnb_context_probe.py --run-id "<run_id>" --account-id "<account_id>" --property-id "<property_id>" --my-place "<my_place>" --log-path "<log_path>"
 ```
 
-Secondary fallback only if `agent-browser` is unavailable or fails: OpenClaw
-built-in Browser with the managed `openclaw` profile:
+After logging `context started`, run the helper with the exec tool and inspect
+its compact JSON output. Continue only when it returns `"status": "completed"`.
+Do not run raw `agent-browser snapshot --json` as the primary path; full Airbnb
+snapshots are large and can stall the tool-call orchestrator. Do not mark
+context completed from reasoning alone.
+
+Secondary fallback only if `tools/airbnb_context_probe.py` fails and reports an
+actionable browser error: OpenClaw built-in Browser with the managed `openclaw`
+profile:
 
 ```bash
 openclaw browser --browser-profile openclaw --json status
@@ -47,10 +51,15 @@ Prefer the host `agent-browser` session in this RevNest runtime. Use the
 documented `user` / existing Chrome session profile only when signed-in browser
 state is explicitly needed and the user can approve any attach prompt.
 
-If one browser method is unavailable or fails, repeat the successful method a
-second time after reload/wait and compare the stable fields. A context read is
-trusted only when two successful reads agree on the listing identity and do not
-conflict on capacity, city/state, bed, or bath.
+If one browser method is unavailable or fails, repeat the successful method
+after reload/wait and compare stable fields. A context read is trusted only when
+the final URL/title/snapshot agree on the listing identity and do not conflict
+on capacity, city/state, bed, or bath.
+
+Do not use web_search to infer the Airbnb location. Use the browser URL, title,
+HTML/text, or snapshot. If exact capacity, bath, or ZIP are not visible, omit
+those fields and upsert partial verified fields such as title, city, state,
+county, bed, listing URL, and `other_info`.
 
 If `my_place` contains `/rooms/<room_id>`, every successful read must end on a
 URL that still contains that room id. Otherwise log `context` as failed and stop

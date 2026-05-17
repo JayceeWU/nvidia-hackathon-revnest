@@ -16,6 +16,32 @@ The goal is not to average signals mechanically. The agent must explain why each
 - Guardrails: `min_price`, `max_price`, and any user-provided pricing constraints.
 - Market signals: weather, holidays, local events, Google Events, Google Hotels, Google vacation-rental results, MoodTrip hotel comps, Ticketmaster, and tourism-demand research.
 
+## Model Boundary
+
+The main OpenClaw agent may use qwen only to choose and call tools. It must not
+author pricing reasoning.
+
+Use two clearly labeled reasoning paths:
+
+1. Fast live trace: run `tools/pricing_reasoning_trace.py` after market-data
+   fan-in. This writes the eight core WebApp-visible steps from observable
+   source facts with `reasoningEngine=source_fact_trace`. These summaries are
+   provisional and must never be described as Nemotron-authored.
+2. Model-authored refinement: use `tools/nemotron_reasoning.py` only when a
+   compact substage needs Nemotron wording. Use the fast trace model, normally
+   `REVNEST_TRACE_REASONING_MODEL=nemotron3:33b`, with bounded runtime:
+
+```bash
+python3 tools/nemotron_reasoning.py --task "<substage>" --model "$REVNEST_TRACE_REASONING_MODEL" --timeout-seconds 45 --max-tokens 256 --max-context-chars 6000 --input-json '<compact_substage_context_json>' --account-id "<account id>" --run-id "<run id>" --property-id "<property id>" --log-path "<progress log>"
+```
+
+The final publish gate remains separate and uses the stronger final verifier
+model, normally `REVNEST_FINAL_REASONING_MODEL=nemotron-3-super:latest`.
+
+Use returned JSON as the source for `log_progress` and
+`upsert_reasoning_step`. Do not persist qwen/tool-orchestrator prose as pricing
+reasoning, and do not persist hidden chain-of-thought.
+
 ## One-Step-At-A-Time Rule
 
 Pricing decisions are context-sensitive. Complete exactly one pricing-decision
@@ -119,7 +145,7 @@ python3 skills/pricing-decision-reasoning/scripts/pricing_decision_calculator.py
    publishing:
 
 ```bash
-python3 skills/pricing-decision-reasoning/scripts/final_reasoning_verifier.py --model nemotron-3-super:latest --input-json '<compact_verification_payload_json>'
+python3 skills/pricing-decision-reasoning/scripts/final_reasoning_verifier.py --model nemotron-3-super:latest --input-json '<compact_verification_payload_json>' --account-id "<account id>" --run-id "<run id>" --property-id "<property id>" --log-path "<progress log>"
 ```
 
    The verifier payload must include the final calculator output, strategy
@@ -349,7 +375,10 @@ recommendation.
 
 During `pricing_decision`, stream concise decision-trace events to
 `runs/airbnb-pricing-progress.log`. These are not hidden chain-of-thought; they
-are short, auditable summaries of the facts checked and decisions made.
+are short, auditable summaries of the facts checked and decisions made. The
+fast live timeline may be filled by `tools/pricing_reasoning_trace.py` with
+`reasoningEngine=source_fact_trace`; later Nemotron refinement must be labeled
+`reasoningEngine=nemotron`.
 
 Use `status=info`, `stage=pricing_decision`, and one of these `substage` values:
 

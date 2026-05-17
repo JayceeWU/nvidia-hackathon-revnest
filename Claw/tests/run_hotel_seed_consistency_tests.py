@@ -12,9 +12,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+DEFAULT_TEST_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/test"
 HOTEL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000103"
-DATA_SQL_PATH = ROOT / "data" / "sql" / "data.sql"
+TEST_SQL_PATH = ROOT / "data" / "sql" / "test.sql"
 
 
 def run_psql(database_url: str, sql: str):
@@ -32,14 +32,17 @@ def run_psql(database_url: str, sql: str):
 
 
 def seed_pricing_record_count(record_type: str) -> int:
-    text = DATA_SQL_PATH.read_text(encoding="utf-8")
+    text = TEST_SQL_PATH.read_text(encoding="utf-8")
     pattern = rf"^\s*'{re.escape(record_type)}',\s*$"
     return len(re.findall(pattern, text, flags=re.MULTILINE))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", default=os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL)
+    parser.add_argument(
+        "--database-url",
+        default=os.environ.get("CLAW_TEST_DATABASE_URL") or DEFAULT_TEST_DATABASE_URL,
+    )
     parser.add_argument("--account-id", default=HOTEL_ACCOUNT_ID)
     args = parser.parse_args()
 

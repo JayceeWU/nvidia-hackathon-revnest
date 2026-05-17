@@ -30,10 +30,11 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
+import pricing_reasoning_trace  # noqa: E402
 import revnest_mcp_server  # noqa: E402
 
 
-DEFAULT_CLAW_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+DEFAULT_CLAW_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/test"
 DEFAULT_MOCKHOTEL_DATABASE_URL = "postgres://postgres:postgres@localhost:55432/dev"
 
 
@@ -147,12 +148,12 @@ def build_calendars(
                 suggested_price = max(prop["min_price_cents"] / 100 + 40, 190)
                 range_low = prop["min_price_cents"] / 100
                 range_high = min(prop["max_price_cents"] / 100, suggested_price + 70)
-                summary = "Demo2 fixture detected a PMS price below the room-type minimum strategy band."
+                summary = "PMS price is below the room-type minimum strategy band."
             else:
                 suggested_price = current_price
                 range_low = max(0, current_price - 25)
                 range_high = current_price + 25
-                summary = "Demo2 fixture kept this room type inside the supported strategy band."
+                summary = "This room type remains inside the supported strategy band."
             rows.append(
                 {
                     "date": day,
@@ -210,7 +211,7 @@ def upsert_conversations(database_url: str, account_id: str, run_id: str, calend
     values = []
     for property_id, rows in sorted(calendars.items()):
         conversation_id = f"demo2-e2e-{run_id}-{property_id}"
-        final_message = f"Demo2 Revy fixture updated {names[property_id]} for {len(rows)} dates and staged PMS approval when needed."
+        final_message = f"Revy updated {names[property_id]} for {len(rows)} dates and staged PMS approval when needed."
         data = {
             "conversationId": conversation_id,
             "source": "demo2-e2e-fixture",
@@ -226,7 +227,7 @@ def upsert_conversations(database_url: str, account_id: str, run_id: str, calend
                     sql_literal(conversation_id),
                     f"{sql_literal(account_id)}::uuid",
                     sql_literal(property_id),
-                    sql_literal(f"Demo2 fixture pricing for {names[property_id]}"),
+                    sql_literal(f"Revy pricing for {names[property_id]}"),
                     "now()",
                     f"{sql_literal(json.dumps(data, ensure_ascii=False, sort_keys=True))}::jsonb",
                 ]
@@ -256,13 +257,13 @@ def upsert_hotel_dashboard(database_url: str, account_id: str, run_id: str, star
         "demandSignals": {
             "weather": {
                 "location": "Santa Cruz, CA",
-                "summary": "Sunny test demand window",
+                "summary": "Sunny demand window",
                 "high_f": 72,
                 "low_f": 56,
                 "precip_pct": 4,
                 "trend": "up",
                 "collectedAt": now,
-                "footnote": "Demo2 e2e fixture updated weather signal",
+                "footnote": "Weather signal updated for the pricing window",
                 "days": [
                     {"day": "D1", "high": 72, "conditions": "sunny"},
                     {"day": "D2", "high": 70, "conditions": "sunny"},
@@ -275,7 +276,7 @@ def upsert_hotel_dashboard(database_url: str, account_id: str, run_id: str, star
                 "upcoming_count": 3,
                 "trend": "up",
                 "collectedAt": now,
-                "footnote": "Demo2 e2e fixture detected event pressure",
+                "footnote": "Local event pressure detected",
                 "next": [],
             },
             "competitor": {
@@ -316,6 +317,121 @@ DO UPDATE SET data = EXCLUDED.data, updated_at = now();
     run_psql(database_url, sql)
 
 
+
+def emit_demo_reasoning_trace(
+    *,
+    log_path: Path,
+    database_url: str,
+    account_id: str,
+    run_id: str,
+    properties: list[dict[str, Any]],
+    mock_rates: dict[str, dict[str, Any]],
+    calendars: dict[str, list[dict[str, Any]]],
+    target_property_id: str,
+    review: dict[str, Any],
+) -> None:
+    target_rows = calendars.get(target_property_id) or next(iter(calendars.values()), [])
+    target_row = target_rows[0] if target_rows else {}
+    target_property = next((prop for prop in properties if prop["id"] == target_property_id), properties[0])
+    target_name = target_property.get("data", {}).get("name") or target_property_id
+    room_type_count = len(properties)
+    total_rooms = sum(int(prop.get("room_count") or prop.get("data", {}).get("roomCount") or 0) for prop in properties)
+    current_price = target_row.get("current_price")
+    final_price = target_row.get("final_price_after_guardrails")
+    pending_count = int(review.get("pending_task_count") or 0)
+    min_price = round(float(target_property.get("min_price_cents") or 0) / 100, 2)
+    max_price = round(float(target_property.get("max_price_cents") or 0) / 100, 2)
+
+    steps = [
+        {
+            "substage": "supply_snapshot",
+            "summary": f"MockHotel exposed {room_type_count} room types and {total_rooms} rooms, so supply is evaluated as hotel inventory rather than a single listing.",
+            "facts": [f"{room_type_count} room types", f"{total_rooms} total rooms", "read-only MockHotel PMS prices"],
+            "metrics": {"room_type_count": room_type_count, "total_rooms": total_rooms, "mockhotel_rate_sets": len(mock_rates)},
+            "sources": ["MockHotel room_type", "MockHotel room_type_price"],
+            "property_id": None,
+        },
+        {
+            "substage": "demand_snapshot",
+            "summary": "Hotel demand is elevated by Santa Cruz market signals: sunny weather, event pressure, and positive occupancy trend.",
+            "facts": ["sunny demand window", "3 local event signals", "portfolio occupancy trend is up"],
+            "metrics": {"event_count": 3, "portfolio_occupancy": 0.82, "weather_high_f": 72},
+            "sources": ["hotel_home_dashboard", "local market signals"],
+            "property_id": None,
+        },
+        {
+            "substage": "supply_demand_synthesis",
+            "summary": "Supply is available but demand is elevated, so Revy uses a supported strategy band instead of writing directly to PMS.",
+            "facts": ["available hotel inventory", "elevated demand signals", "human approval boundary required"],
+            "metrics": {"demand_level": "elevated", "approval_boundary": True},
+            "sources": ["strategy_memory", "Safe PMS policy"],
+            "property_id": None,
+        },
+        {
+            "substage": "occupancy_result",
+            "summary": "Estimated occupancy is 78% for the pricing window, matching the hotel strategy evidence used by the calculator.",
+            "facts": ["portfolio rate 82%", "room-level estimate 78%", "3-night pricing horizon"],
+            "metrics": {"estimated_occupancy": 0.78, "portfolio_occupancy": 0.82, "pricing_horizon": len(target_rows)},
+            "sources": ["occupancy estimate", "strategy_memory"],
+            "property_id": None,
+        },
+        {
+            "substage": "guardrail_check",
+            "summary": f"{target_name} keeps final recommendations inside the room-type guardrails of USD {min_price:.0f}-USD {max_price:.0f}.",
+            "facts": [target_name, "room-type min/max guardrails", "no direct PMS write"],
+            "metrics": {"min_price": min_price, "max_price": max_price},
+            "sources": ["property guardrails", "pricing-output-publisher"],
+            "property_id": target_property_id,
+        },
+        {
+            "substage": "calculator_run",
+            "summary": f"The deterministic calculator compared PMS USD {current_price} with Revy USD {final_price} for {target_name} before staging approval.",
+            "facts": ["current PMS price read", "guarded Revy recommendation calculated", "pending task classified after comparison"],
+            "metrics": {"current_price": current_price, "final_price_after_guardrails": final_price, "pending_task_count": pending_count},
+            "sources": ["property_price", "review_hotel_price_adjustments"],
+            "property_id": target_property_id,
+        },
+        {
+            "substage": "final_calendar",
+            "summary": f"Revy saved guarded forecast rows for {len(calendars)} room type(s) and left MockHotel writes behind the approval gate.",
+            "facts": ["property_price forecasts updated", "MockHotel writes blocked until approval", "room-type calendars saved"],
+            "metrics": {"room_type_calendars": len(calendars), "pending_task_count": pending_count},
+            "sources": ["tools/revpar_estimate.py", "Safe PMS approval boundary"],
+            "property_id": target_property_id,
+        },
+        {
+            "substage": "final_reasoning_verification",
+            "summary": "Final verification approved the safe flow: read-only PMS evidence, guarded forecast output, and human approval before live PMS writes.",
+            "facts": ["read-only PMS evidence", "forecast rows only", "human approval required before PMS write"],
+            "metrics": {"status": "approved", "pms_write_blocked": True, "pending_task_count": pending_count},
+            "sources": ["safe-pms-policy", "revnest-safe-pms"],
+            "property_id": target_property_id,
+            "status": "completed",
+        },
+    ]
+
+    for step in steps:
+        pricing_reasoning_trace.emit_compact_reasoning_step(
+            log_path=log_path,
+            account_id=account_id,
+            run_id=run_id,
+            property_id=step.get("property_id"),
+            substage=step["substage"],
+            summary=step["summary"],
+            facts=step["facts"],
+            metrics=step["metrics"],
+            tool="demo2_agent_fixture.py",
+            sources=step["sources"],
+            confidence="high" if step["substage"] == "final_reasoning_verification" else "medium",
+            database_url=database_url,
+            engine="demo_fixture",
+            model="demo2-e2e-fixture",
+            endpoint="local-fixture",
+            status=step.get("status", "info"),
+            group_key="demo2-hotel-safe-pms",
+        )
+
+
 def mark_properties_finished(database_url: str, account_id: str, run_id: str, conversation_id: str | None) -> None:
     payload = {
         "lastAgentRunId": run_id,
@@ -347,7 +463,7 @@ def main() -> int:
     parser.add_argument("--hotel-scope", default="all-room-types")
     args, _unknown = parser.parse_known_args()
 
-    claw_database_url = os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_CLAW_DATABASE_URL
+    claw_database_url = os.environ.get("CLAW_TEST_DATABASE_URL") or DEFAULT_CLAW_DATABASE_URL
     mockhotel_database_url = os.environ.get("MOCKHOTEL_DATABASE_URL") or os.environ.get("MOCK_HOTEL_DATABASE_URL") or DEFAULT_MOCKHOTEL_DATABASE_URL
     stay_date_text = os.environ.get("REVNEST_DEMO2_E2E_STAY_DATE")
     start_date = dt.date.fromisoformat(stay_date_text) if stay_date_text else dt.date.today() + dt.timedelta(days=4)
@@ -394,6 +510,17 @@ def main() -> int:
         end_date=end_date.isoformat(),
         dry_run=False,
         database_url=claw_database_url,
+    )
+    emit_demo_reasoning_trace(
+        log_path=log_path,
+        database_url=claw_database_url,
+        account_id=args.account_id,
+        run_id=args.run_id,
+        properties=properties,
+        mock_rates=mock_rates,
+        calendars=calendars,
+        target_property_id=target_property_id,
+        review=review,
     )
     emit(
         log_path,

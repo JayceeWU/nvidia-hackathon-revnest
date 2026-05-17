@@ -32,7 +32,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 WEBAPP_DIR = ROOT / "WebApp"
-DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/dev"
+DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:55434/test"
 ACCOUNT_ID = "00000000-0000-0000-0000-0000000001e1"
 ACCOUNT_EMAIL = "demo1-e2e-airbnb@revnest.ai"
 ACCOUNT_PASSWORD = "demo1"
@@ -249,7 +249,10 @@ FROM (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", default=os.environ.get("CLAW_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL)
+    parser.add_argument(
+        "--database-url",
+        default=os.environ.get("CLAW_TEST_DATABASE_URL") or DEFAULT_DATABASE_URL,
+    )
     parser.add_argument("--port", type=int, default=3211)
     parser.add_argument("--webapp-url")
     parser.add_argument("--no-start-webapp", action="store_true")
@@ -269,12 +272,14 @@ def main() -> int:
             **os.environ,
             "DATABASE_URL": args.database_url,
             "CLAW_DATABASE_URL": args.database_url,
+            "CLAW_TEST_DATABASE_URL": args.database_url,
             "REVNEST_WEBAPP_PORT": str(args.port),
             "REVNEST_SESSION_SECRET": "demo1-e2e-local-session-secret",
             "REVNEST_INSECURE_LOCAL_COOKIES": "1",
         }
         if not args.live_agent:
             env["REVNEST_AGENT_RUN_FIXTURE"] = "demo1"
+            env["REVNEST_ALLOW_AGENT_FIXTURES"] = "1"
         if not args.skip_webapp_build:
             build_webapp(env)
         server_process, server_log_path = start_webapp(args.port, env)

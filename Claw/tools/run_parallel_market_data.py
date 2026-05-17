@@ -311,7 +311,7 @@ def dashboard_trend(value: str | None) -> str:
 
 def result_for_stage(results: list[dict[str, Any]], stage: str) -> dict[str, Any] | None:
     matches = [result for result in results if result.get("stage") == stage]
-    return next((result for result in matches if result.get("status") == "completed"), matches[0] if matches else None)
+    return next((result for result in matches if result.get("status") == "completed"), None)
 
 
 def result_json(result: dict[str, Any] | None) -> dict[str, Any]:
@@ -535,7 +535,7 @@ def build_hotel_home_dashboard_data(
     end_date: dt.date,
     horizon: int,
     env: dict[str, str],
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     weather_result = result_for_stage(results, "weather")
     ticketmaster_result = result_for_stage(results, "events_ticketmaster")
     serpapi_events_result = result_for_stage(results, "events_serpapi")
@@ -544,25 +544,39 @@ def build_hotel_home_dashboard_data(
     dashboard_collected_at = utc_now_iso()
 
     demand_signals: dict[str, Any] = {}
-    demand_signals["weather"] = weather_dashboard_signal(
-        args,
-        result_json(weather_result),
-        (weather_result or {}).get("summary"),
-        result_collected_at(weather_result),
-    )
-    demand_signals["events"] = events_dashboard_signal(
-        args,
-        result_json(ticketmaster_result),
-        result_json(serpapi_events_result),
-        compact_list([str((ticketmaster_result or {}).get("summary") or ""), str((serpapi_events_result or {}).get("summary") or "")], 2),
-        max(result_collected_at(ticketmaster_result), result_collected_at(serpapi_events_result)),
-    )
-    demand_signals["competitor"] = competitor_dashboard_signal(
-        args,
-        result_json(comps_result),
-        (comps_result or {}).get("summary"),
-        result_collected_at(comps_result),
-    )
+    dashboard_source_stages: list[str] = []
+    if weather_result:
+        dashboard_source_stages.append("weather")
+        demand_signals["weather"] = weather_dashboard_signal(
+            args,
+            result_json(weather_result),
+            weather_result.get("summary"),
+            result_collected_at(weather_result),
+        )
+    if ticketmaster_result or serpapi_events_result:
+        dashboard_source_stages.extend(
+            result["stage"]
+            for result in (ticketmaster_result, serpapi_events_result)
+            if result
+        )
+        demand_signals["events"] = events_dashboard_signal(
+            args,
+            result_json(ticketmaster_result),
+            result_json(serpapi_events_result),
+            compact_list([str((ticketmaster_result or {}).get("summary") or ""), str((serpapi_events_result or {}).get("summary") or "")], 2),
+            max(result_collected_at(ticketmaster_result), result_collected_at(serpapi_events_result)),
+        )
+    if comps_result:
+        dashboard_source_stages.append("hotel_comps_serpapi")
+        demand_signals["competitor"] = competitor_dashboard_signal(
+            args,
+            result_json(comps_result),
+            comps_result.get("summary"),
+            result_collected_at(comps_result),
+        )
+    if not dashboard_source_stages:
+        return None
+
     occupancy = occupancy_dashboard_signal(property_rows, horizon, dashboard_collected_at)
     if occupancy:
         demand_signals["occupancy"] = occupancy
@@ -580,6 +594,7 @@ def build_hotel_home_dashboard_data(
             "pricingHorizon": horizon,
             "collectedAt": dashboard_collected_at,
             "updatedAt": dashboard_collected_at,
+            "dashboardSourceStages": dashboard_source_stages,
         },
     }
 
@@ -1234,27 +1249,34 @@ def main() -> int:
         futures = [executor.submit(run_task, task, env, log_path, args.task_timeout_seconds) for task in tasks]
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
-            try:
-                for summary_property_id in args.summary_property_ids:
-                    write_market_data_summary(args, result, start, end, horizon, env, property_id=summary_property_id)
+            if result.get("status") == "completed":
+                try:
+                    for summary_property_id in args.summary_property_ids:
+                        write_market_data_summary(args, result, start, end, horizon, env, property_id=summary_property_id)
+                    result["summary_write"] = {
+                        "status": "completed",
+                        "table": "market_data_summary",
+                        "property_ids": args.summary_property_ids,
+                    }
+                except Exception as exc:  # noqa: BLE001 - persistence failure must be returned to the caller.
+                    error = str(exc)
+                    result["summary_write"] = {"status": "failed", "table": "market_data_summary", "error": error}
+                    summary_write_errors.append({"stage": result.get("stage", "unknown"), "tool": result.get("tool", "unknown"), "error": error})
+                    log_event(
+                        run_id=args.run_id,
+                        stage=result.get("stage", "market_data_parallel"),
+                        status="failed",
+                        message=f"Market-data summary write failed for {result.get('label', 'unknown source')}",
+                        tool="postgres/market_data_summary",
+                        error=error,
+                        log_path=log_path,
+                    )
+            else:
                 result["summary_write"] = {
-                    "status": "completed",
+                    "status": "skipped",
                     "table": "market_data_summary",
-                    "property_ids": args.summary_property_ids,
+                    "reason": "source did not return a trusted completed signal",
                 }
-            except Exception as exc:  # noqa: BLE001 - persistence failure must be returned to the caller.
-                error = str(exc)
-                result["summary_write"] = {"status": "failed", "table": "market_data_summary", "error": error}
-                summary_write_errors.append({"stage": result.get("stage", "unknown"), "tool": result.get("tool", "unknown"), "error": error})
-                log_event(
-                    run_id=args.run_id,
-                    stage=result.get("stage", "market_data_parallel"),
-                    status="failed",
-                    message=f"Market-data summary write failed for {result.get('label', 'unknown source')}",
-                    tool="postgres/market_data_summary",
-                    error=error,
-                    log_path=log_path,
-                )
             results.append(result)
 
     results.sort(key=lambda item: item["stage"])
@@ -1264,8 +1286,24 @@ def main() -> int:
     if args.property_type == "hotel":
         try:
             hotel_home_dashboard = build_hotel_home_dashboard_data(args, results, start, end, horizon, env)
-            write_hotel_home_dashboard(args, hotel_home_dashboard, env)
-            hotel_home_dashboard_write = {"status": "completed", "table": "hotel_home_dashboard", "id": "home"}
+            if hotel_home_dashboard:
+                write_hotel_home_dashboard(args, hotel_home_dashboard, env)
+                hotel_home_dashboard_write = {"status": "completed", "table": "hotel_home_dashboard", "id": "home"}
+            else:
+                hotel_home_dashboard_write = {
+                    "status": "skipped",
+                    "table": "hotel_home_dashboard",
+                    "id": "home",
+                    "reason": "no trusted external market source completed",
+                }
+                log_event(
+                    run_id=args.run_id,
+                    stage="market_data_parallel",
+                    status="skipped",
+                    message="Hotel home dashboard write skipped because no trusted external market source completed",
+                    tool="postgres/hotel_home_dashboard",
+                    log_path=log_path,
+                )
         except Exception as exc:  # noqa: BLE001 - dashboard persistence is part of the hotel market-data contract.
             dashboard_write_error = str(exc)
             hotel_home_dashboard_write = {"status": "failed", "table": "hotel_home_dashboard", "id": "home", "error": dashboard_write_error}

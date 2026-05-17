@@ -11,11 +11,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import ssl
 import sys
 import urllib.error
 import urllib.request
 from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[3]
+TOOLS_DIR = ROOT / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import progress_logger  # noqa: E402
+import reasoning_step_logger  # noqa: E402
 
 
 DEFAULT_MODEL = "nemotron-3-super:latest"
@@ -134,6 +144,51 @@ def normalize_verdict(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def maybe_log_and_persist(args: argparse.Namespace, verdict: dict[str, Any]) -> None:
+    if args.log_path and args.run_id:
+        progress_logger.append_event(
+            args.log_path,
+            run_id=args.run_id,
+            stage="pricing_decision",
+            substage="final_reasoning_verification",
+            status="completed" if verdict.get("status") == "approved" else "failed",
+            message=verdict.get("summary") or verdict.get("status") or "Final reasoning verification completed.",
+            property_id=args.property_id,
+            workflow="pricing-workflow",
+            skill="pricing-workflow",
+            called_skill="pricing-decision-reasoning",
+            tool="final_reasoning_verifier.py",
+            error=None if verdict.get("status") == "approved" else "; ".join(verdict.get("issues") or [])[:1000],
+            metadata={
+                "finalReasoningVerification": verdict,
+                "reasoningModel": verdict.get("model") or args.model,
+                "reasoningEndpoint": verdict.get("base_url") or args.base_url,
+                "reasoningEngine": "nemotron",
+                "qwenRole": "tool_call_orchestration_only",
+            },
+        )
+    if args.no_persist or not args.account_id or not args.run_id:
+        return
+    reasoning_step_logger.upsert_reasoning_step(
+        account_id=args.account_id,
+        run_id=args.run_id,
+        property_id=args.property_id,
+        stage="pricing_decision",
+        substage="final_reasoning_verification",
+        summary=verdict.get("summary") or verdict.get("status") or "Final reasoning verification completed.",
+        facts=verdict.get("issues") or [],
+        metrics={
+            "status": verdict.get("status"),
+            "reasoning_model": verdict.get("model") or args.model,
+            "reasoning_endpoint": verdict.get("base_url") or args.base_url,
+            **(verdict.get("checked") or {}),
+        },
+        tool="final_reasoning_verifier.py",
+        sources=["final_calculator_output", "strategy_memory", "occupancy_estimator", "guardrails"],
+        confidence="high" if verdict.get("status") == "approved" else "low",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify a final RevNest price calendar with a stronger local model.")
     parser.add_argument("--input-json", help="Verification payload JSON. If omitted, JSON is read from stdin.")
@@ -142,6 +197,11 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--max-context-chars", type=int, default=18000)
     parser.add_argument("--max-tokens", type=int, default=768)
+    parser.add_argument("--account-id")
+    parser.add_argument("--run-id")
+    parser.add_argument("--property-id")
+    parser.add_argument("--log-path")
+    parser.add_argument("--no-persist", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Print prompt metadata without calling the model.")
     args = parser.parse_args()
 
@@ -169,6 +229,7 @@ def main() -> None:
         verdict = normalize_verdict(extract_json(content or reasoning))
         verdict["model"] = args.model
         verdict["base_url"] = args.base_url
+        maybe_log_and_persist(args, verdict)
         print(json.dumps(verdict, ensure_ascii=False, sort_keys=True))
         if verdict["status"] != "approved":
             raise SystemExit(2)
