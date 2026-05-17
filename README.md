@@ -13,7 +13,19 @@ hotel price changes require a human approval action from WebApp.
 ```bash
 docker compose -f Claw/data/docker-compose.yml up -d
 docker compose -f MockHotel/docker-compose.yml up -d postgres
-npm --prefix WebApp run dev
+```
+
+Start WebApp in one terminal with the seeded Claw `test` database:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:55434/test \
+  CLAW_DATABASE_URL=postgres://postgres:postgres@localhost:55434/test \
+  npm --prefix WebApp run dev
+```
+
+Start MockHotel in another terminal:
+
+```bash
 npm --prefix MockHotel run dev
 ```
 
@@ -188,10 +200,14 @@ Start MockHotel's database:
 docker compose -f MockHotel/docker-compose.yml up -d postgres
 ```
 
-Start WebApp:
+Start WebApp with the seeded Claw `test` database when you want to use the
+documented demo logins locally. The default Claw `dev` database is schema-only
+for blank-app development.
 
 ```bash
-npm --prefix WebApp run dev
+DATABASE_URL=postgres://postgres:postgres@localhost:55434/test \
+  CLAW_DATABASE_URL=postgres://postgres:postgres@localhost:55434/test \
+  npm --prefix WebApp run dev
 ```
 
 Start MockHotel in a second terminal:
@@ -239,6 +255,7 @@ MOCKHOTEL_AGENT_TOKEN=<same-shared-read-token>
 REVNEST_NEMOCLAW_SANDBOX=revnest-judge
 REVNEST_TOOL_MODEL=ollama-local/qwen3.6:35b
 REVNEST_TOOL_MODEL_BASE_URL=http://127.0.0.1:11434/v1
+REVNEST_TOOL_MODEL_TIMEOUT_SECONDS=300
 REVNEST_TRACE_REASONING_MODEL=nemotron3:33b
 REVNEST_TRACE_REASONING_BASE_URL=http://127.0.0.1:11434/v1
 REVNEST_FINAL_REASONING_MODEL=nemotron-3-super:latest
@@ -511,8 +528,14 @@ npm script or environment.
 ### WebApp Cannot Log In
 
 Make sure the Claw database is running on port `55434`. The default `dev`
-database is schema-only; use the seeded `test` database or create an account row
-when you need demo logins.
+database is schema-only. For the documented demo logins, point both WebApp and
+Claw at the seeded `test` database:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:55434/test \
+  CLAW_DATABASE_URL=postgres://postgres:postgres@localhost:55434/test \
+  npm --prefix WebApp run dev
+```
 
 ### Hotel Room Types Do Not Appear
 
@@ -525,6 +548,17 @@ seed SQL, reseed the Claw test database from `Claw/data/sql/test.sql`.
 Check the run log under `Claw/runs/`. WebApp reads JSONL progress events from
 the run log and final database records from PostgreSQL. Confirm the Python
 runner can write to `Claw/runs/` and connect to `CLAW_DATABASE_URL`.
+
+If the log shows `ma-local` or `LLM request failed` with `reason=timeout` around
+50 seconds, the local model request is timing out before Ollama responds. Keep
+`REVNEST_TOOL_MODEL_TIMEOUT_SECONDS=300` or higher, and prewarm the tool model
+when it has been unloaded:
+
+```bash
+curl -sS --max-time 300 http://127.0.0.1:11434/api/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3.6:35b","prompt":"Return OK.","stream":false,"options":{"num_predict":1},"keep_alive":"30m"}'
+```
 
 ### MockHotel Agent API Returns 401 Or 503
 
